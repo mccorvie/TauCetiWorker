@@ -13,7 +13,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .agents import (
@@ -79,6 +80,7 @@ from .survey import (
     spread_candidates,
     survey,
 )
+from .tools import add_tool_prompt
 
 # ============================================================================
 # Round — the want-gated cascade over survey(): classify every open PR, then do ONE work unit.
@@ -109,6 +111,9 @@ class RoundOpts:
     # what every documented configuration gets.
     review_min_queue: int = 0  # review only when at least this many PRs are awaiting review
     review_min_age: int = 0  # minutes a PR must have been awaiting review before this worker takes it
+    tools: tuple[str, ...] = ()
+    round_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    phase: str | None = None
 
     @property
     def agent_name(self) -> str:
@@ -122,6 +127,11 @@ class RoundOpts:
 def _effective_authoring_profile(opts) -> AuthoringProfile:
     """Profile accessor tolerant of lightweight test/extension option objects."""
     return getattr(opts, "authoring_profile", None) or resolve_authoring_profile(opts.work_model)
+
+
+def _with_tools(prompt: str, opts: RoundOpts, phase: str, bubble: bool) -> str:
+    """Attach model-facing instructions for the explicitly enabled tools eligible in this phase."""
+    return add_tool_prompt(prompt, tuple(getattr(opts, "tools", ())), phase, wrapper_bin(bubble))
 
 
 @dataclass
@@ -195,6 +205,7 @@ def throttle_review(sv: Survey, opts, *, now: float | None = None) -> None:
 
 
 def run_round(w: Worker, opts: RoundOpts) -> int:
+    log(f"round tools: {json.dumps(list(getattr(opts, 'tools', ())))}")
     # Re-mirror the operator's (externally-refreshed) credentials into this worker's isolated home
     # before any work runs. The quota pacer does this too, and every paced path now reaches it — but the
     # unpaced ones (kiro, the OpenRouter providers, --dry-run's early return) do not, and host-mode
@@ -438,6 +449,7 @@ def dispatch(stage: str, w: Worker, sv: Survey, c: Candidate, opts: RoundOpts) -
     """Perform one stage. Returns its rc, or None if the candidate was claimed by another worker
     (caller tries the next candidate). Dry-run logs the intent and returns 0."""
     bubble = _bubble(stage, opts)
+    selected_tools = tuple(getattr(opts, "tools", ()))
     if opts.dry_run:
         target = f"#{c.pr}" if c.pr else (c.head[:12] if c.head else c.reason)
         log(
@@ -491,6 +503,12 @@ def dispatch(stage: str, w: Worker, sv: Survey, c: Candidate, opts: RoundOpts) -
         checked = validate_kiro_model_access(w.cfg, kiro_probe_profile)
         if stage != "review":
             opts.authoring_profile = checked
+    opts.phase = stage
+    profile = _effective_authoring_profile(opts) if stage != "review" else None
+    os.environ["TAUCETI_PHASE"] = stage
+    os.environ["TAUCETI_AGENT"] = profile.provider if profile else opts.work_model
+    os.environ["TAUCETI_MODEL"] = profile.model if profile else opts.work_model
+    os.environ["TAUCETI_ROUND_ID"] = getattr(opts, "round_id", uuid.uuid4().hex)
     # LAUNCH STAGE for a Claude round selected on an unopened window. Everything the bootstrap decision
     # requires is true exactly here and not earlier: a concrete work unit is in hand, the survey (and so
     # the GitHub preflight) succeeded, Claude is the model actually about to run, and the agent binary
@@ -526,8 +544,9 @@ def dispatch(stage: str, w: Worker, sv: Survey, c: Candidate, opts: RoundOpts) -
         profile = _effective_authoring_profile(opts)
         effort = profile.effort or "none"
         detail = f"provider={profile.provider}, model={profile.model}, effort={effort}, sandbox={where}"
+    detail += f", tools={json.dumps(list(selected_tools), separators=(',', ':'))}"
     log(f"→ {stage.upper()}: {what}   [{detail}]")
-    report_runtime("running", phase=stage, target=what, detail=detail, next_action_at=None)
+    report_runtime("running", phase=stage, target=what, detail=detail, tools=list(selected_tools), next_action_at=None)
     pre = _progress_snapshot(w, c) if stage in PROGRESS_GUARDED else None
     pre_head = _checkout_head(w.cfg) if (stage in FILE_CHANGE_STAGES and not bubble) else None
     rc = fn(w, sv, c, opts, bubble)
@@ -808,7 +827,12 @@ def _do_fixlike(
         return None
     if not w.claims.begin_branch_work(pr, head, p.head_ref, p.head_owner, p.head_repo):
         return None  # claimed elsewhere → caller tries the next candidate
-    prompt = fill_prompt(HERE / "prompts" / prompt_file, PR=pr, AGENT=opts.agent_name, BIN=wrapper_bin(bubble))
+    prompt = _with_tools(
+        fill_prompt(HERE / "prompts" / prompt_file, PR=pr, AGENT=opts.agent_name, BIN=wrapper_bin(bubble)),
+        opts,
+        label,
+        bubble,
+    )
     if bubble:
         # The PR's head repo (its own fork, for a fork-PR) gets git fetch/push in the bubble. bubble also
         # auto-derives this from a PR target, so it's explicit/testable belt-and-suspenders (kim-em/bubble#320).
@@ -1264,23 +1288,28 @@ def do_roadmap(w, sv, c, opts, bubble) -> int:
         return run_in_bubble(
             w,
             TAUCETI,
-            fill_prompt(
-                HERE / "prompts" / "roadmap.md",
-                ONLY=only,
-                SKIP=skip_str,
-                CLAIMED=claimed_str,
-                AGENT=opts.agent_name,
-                FORK=fork_owner,
-                WORKERID=w.cfg.wid,
-                ROADMAP_DIR="/opt/roadmap/TauCetiRoadmap",
-                REVIEW_DIR="/opt/review",
-                RUBRICS=(
-                    f"/opt/rubrics/{RUBRIC_BUNDLE}"
-                    if bundle is not None
-                    else "/opt/review/rubrics (read every .md file in it)"
+            _with_tools(
+                fill_prompt(
+                    HERE / "prompts" / "roadmap.md",
+                    ONLY=only,
+                    SKIP=skip_str,
+                    CLAIMED=claimed_str,
+                    AGENT=opts.agent_name,
+                    FORK=fork_owner,
+                    WORKERID=w.cfg.wid,
+                    ROADMAP_DIR="/opt/roadmap/TauCetiRoadmap",
+                    REVIEW_DIR="/opt/review",
+                    RUBRICS=(
+                        f"/opt/rubrics/{RUBRIC_BUNDLE}"
+                        if bundle is not None
+                        else "/opt/review/rubrics (read every .md file in it)"
+                    ),
+                    SOURCE_GUIDANCE=source_guidance,
+                    BIN=wrapper_bin(bubble=True),
                 ),
-                SOURCE_GUIDANCE=source_guidance,
-                BIN=wrapper_bin(bubble=True),
+                opts,
+                "roadmap",
+                True,
             ),
             opts,
             mounts=mounts,
@@ -1302,4 +1331,5 @@ def do_roadmap(w, sv, c, opts, bubble) -> int:
         SOURCE_GUIDANCE=source_guidance,
         BIN=wrapper_bin(),
     )
+    prompt = _with_tools(prompt, opts, "roadmap", False)
     return run_agent_host(w.cfg.checkout, prompt, _effective_authoring_profile(opts), w.cfg.logdir)

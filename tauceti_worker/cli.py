@@ -62,6 +62,8 @@ from .review_state import ReviewState
 from .round import Claims, RoundContext, cmd_heartbeat
 from .runtime_status import report_failure
 from .survey import Counters, survey
+from .tools import doctor_rows as tool_doctor_rows
+from .tools import resolve_tools
 from .tui import cmd_tui, render_survey
 from .usage import kiro_data_dir, usage_snapshot
 from .work_units import RoundOpts, Worker, _bubble, raise_on_account_mismatch, run_round, want
@@ -221,6 +223,13 @@ def add_work_flags(p: argparse.ArgumentParser) -> None:
         "(checked-out/default HEAD) for a new roadmap PR. Requires the roadmap phase to be enabled and "
         "one specific --roadmap-only area; the source is mounted read-only in bubble mode and treated "
         "as non-definitive reference material",
+    )
+    p.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="enable a supported trusted agent tool (repeatable; none enabled by default)",
     )
     p.add_argument(
         "--roadmap-skip",
@@ -652,6 +661,10 @@ def cmd_status(args) -> int:
 
 
 def cmd_work(args, *, only: list[str], agent: str, one_round: bool) -> int:
+    try:
+        tools = resolve_tools(getattr(args, "tool", []))
+    except ValueError as e:
+        raise Die(f"--tool: {e}") from None
     # --host used to opt OUT of the bubble sandbox; running on the host is now the default, so the flag
     # is a no-op we only warn about. --bubble is the way to opt back INTO the sandbox.
     if getattr(args, "host", False):
@@ -817,6 +830,7 @@ def cmd_work(args, *, only: list[str], agent: str, one_round: bool) -> int:
             account=getattr(args, "account", None),
             review_min_queue=review_min_queue,
             review_min_age=review_min_age,
+            tools=tools,
         )
         # Before preflight, and NOT gated on --dry-run: --dry-run is how an operator checks their setup,
         # so it is the one run that most needs to answer "am I on the right account?". The check is a
@@ -884,6 +898,7 @@ def cmd_doctor(args) -> int:
     rows.append(("pi", _have("pi"), "for --agent deepseek/minimax"))
     rows.append(("kiro-cli", _have("kiro-cli"), "for --agent kiro"))
     rows.append(("tmux", _have("tmux"), "optional `tauceti workers tmux` log workspace"))
+    optional_tool_rows = tool_doctor_rows()
     codex_creds = codex_dir(cfg.home) / "auth.json"
     rows.append(("codex creds", _safe_exists(codex_creds), str(codex_creds)))
     # Which Codex account those credentials spend under. `codex login status` will not tell you (it
@@ -921,6 +936,11 @@ def cmd_doctor(args) -> int:
         if not ok and name in ("gh", "git", "uv/uvx", "gh auth"):
             bad += 1
         print(f"  [{mark:7}] {name:14} {note}")
+    if optional_tool_rows:
+        print("  optional worker tools:")
+        for name, ok, note in optional_tool_rows:
+            mark = "ok " if ok else "MISSING"
+            print(f"  [{mark:7}] {name:14} {note}")
     return 1 if bad else 0
 
 

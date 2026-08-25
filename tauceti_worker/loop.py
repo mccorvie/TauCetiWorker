@@ -75,6 +75,7 @@ def cmd_loop(args, cfg: Config, *, only: list[str], agent: str) -> int:
     unpaced = agent in OPENROUTER_MODELS or agent == "kiro"
     ignore_quota = getattr(args, "ignore_quota", False)
     bubble = getattr(args, "bubble", False)
+    selected_tools = list(getattr(args, "tool", []))
     quota_cmd = getattr(args, "quota_cmd", None)
     log(f"loop start: worker={cfg.wid} only={','.join(only) or '(all)'} agent={agent}{' [bubble]' if bubble else ''}")
     report_runtime("idle", detail="loop started", phase=None, target=None, next_action_at=None)
@@ -220,6 +221,8 @@ def cmd_loop(args, cfg: Config, *, only: list[str], agent: str) -> int:
                 tail += ["--account", account]
             if bubble:
                 tail.append("--bubble")
+            for tool in selected_tools:
+                tail += ["--tool", tool]
             source = getattr(args, "source", None)
             if source is not None:
                 tail += ["--source", source]

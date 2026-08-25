@@ -34,6 +34,7 @@ from .paths import HERE, ensure_ssl_cert_file, entry_cmd, self_argv, self_env
 from .quota import parse_pace_curve
 from .round import signal_group
 from .runtime_status import STATUS_ENV, read_json, update_status
+from .tools import resolve_tools
 
 CONFIG_VERSION = 1
 DEFAULT_INTERVAL = 2.0
@@ -51,6 +52,7 @@ _WORKER_KEYS = {
     "roadmap_extra_identities",
     "respect_claims",
     "source",
+    "tools",
     "author_model",
     "author_effort",
     "pace",
@@ -252,6 +254,7 @@ class WorkerSpec:
     roadmap_extra_identities: tuple[str, ...] = ()
     respect_claims: bool = True
     source: str | None = None
+    tools: tuple[str, ...] = ()
     author_model: str | None = None
     author_effort: str | None = None
     pace: str | None = None
@@ -287,6 +290,10 @@ class WorkerSpec:
         restart = _string(raw.get("restart", "always"), f"workers[{index}].restart")
         if restart not in ("always", "on-failure", "never"):
             raise WorkersError(f"workers[{index}].restart must be 'always', 'on-failure', or 'never'")
+        try:
+            tools = resolve_tools(_strings(raw.get("tools", []), f"workers[{index}].tools"))
+        except ValueError as e:
+            raise WorkersError(f"workers[{index}].tools: {e}") from None
         spec = WorkerSpec(
             id=wid,
             enabled=enabled,
@@ -302,6 +309,7 @@ class WorkerSpec:
             ),
             respect_claims=_boolean(raw.get("respect_claims", True), f"workers[{index}].respect_claims"),
             source=_string(raw.get("source"), f"workers[{index}].source", optional=True),
+            tools=tools,
             author_model=_string(raw.get("author_model"), f"workers[{index}].author_model", optional=True),
             author_effort=_string(raw.get("author_effort"), f"workers[{index}].author_effort", optional=True),
             pace=_pace(raw.get("pace"), f"workers[{index}].pace"),
@@ -336,6 +344,8 @@ class WorkerSpec:
             value["roadmap_extra_identities"] = list(self.roadmap_extra_identities)
         if not self.respect_claims:
             value["respect_claims"] = False
+        if self.tools:
+            value["tools"] = list(self.tools)
         for name in ("source", "author_model", "author_effort", "pace"):
             item = getattr(self, name)
             if item is not None:
@@ -368,6 +378,8 @@ class WorkerSpec:
             argv.append("--ignore-quota")
         if self.auto_refresh:
             argv.append("--auto-refresh")
+        for tool in self.tools:
+            argv += ["--tool", tool]
         if self.roadmap_only is not None:
             argv += ["--roadmap-only", self.roadmap_only]
         if self.roadmap_skip:
@@ -1700,6 +1712,7 @@ def add_workers_parser(subparsers) -> None:
     add.add_argument("--roadmap-only", help="pin roadmap rounds to one area")
     add.add_argument("--roadmap-skip", default="", help="comma-separated roadmap areas to exclude")
     add.add_argument("--source", help="source repository; requires roadmap in --only and one pinned roadmap area")
+    add.add_argument("--tool", action="append", default=[], help="supported trusted agent tool (repeatable)")
     add.add_argument("--author-model", help="exact authoring model; needs an explicit --agent")
     add.add_argument("--author-effort", help="reasoning effort for an explicit codex/claude/kiro agent")
     add.add_argument("--pace", help="soft pacing curve as time%%:budget%% points, e.g. 0:10,50:70,90:90")
@@ -1782,6 +1795,7 @@ def cmd_workers(args) -> int:
                     "sandbox": args.sandbox,
                     "ignore_quota": args.ignore_quota,
                     "auto_refresh": args.auto_refresh,
+                    "tools": args.tool,
                     "roadmap_skip": [item for item in args.roadmap_skip.split(",") if item],
                     "stream": args.stream,
                     "isolate_home": args.isolate_home,

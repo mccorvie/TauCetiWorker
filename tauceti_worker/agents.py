@@ -47,6 +47,9 @@ from .quota import (
     mirror_creds,
 )
 from .runtime_status import report_failure
+from .tools import bubble_mounts as tool_bubble_mounts
+from .tools import forwarded_environment as tool_forwarded_environment
+from .tools import stage_tool_scripts
 from .transcript import AgentTranscriptRenderer
 from .usage import UsageError, kiro_data_dir, kiro_process_env, snapshot_kiro_auth_db
 
@@ -1294,6 +1297,9 @@ def run_in_bubble(
     for f in ("git-safe-push", "gh-safe-pr-create", "claim.sh"):
         shutil.copy(HERE / "scripts" / f, rounddir / f)
         os.chmod(rounddir / f, 0o755)
+    selected_tools = tuple(getattr(opts, "tools", ()))
+    phase = getattr(opts, "phase", None)
+    stage_tool_scripts(rounddir, selected_tools, phase)
     if wm in OPENROUTER_MODELS:  # OpenRouter key has no proxy — stage it 0600, mounted read-only
         keyf = rounddir / "openrouter.key"
         keyf.write_text(os.environ.get("OPENROUTER_API_KEY", ""))
@@ -1306,7 +1312,7 @@ def run_in_bubble(
     _bubble_pop(cfg, env)  # clear any container a SIGKILLed prior round left behind
 
     mount_flags = ["--mount", f"{rounddir}:/opt/round:ro"]
-    for m in mounts or []:
+    for m in [*(mounts or []), *tool_bubble_mounts(selected_tools, phase)]:
         mount_flags += ["--mount", m]
 
     # Fork-PR write support (kim-em/bubble#320): grant the in-container agent git fetch/push to the
@@ -1327,6 +1333,12 @@ def run_in_bubble(
         "TAUCETI_PUSH_REMOTE",
         "TAUCETI_TARGET_MARKER",
         "TAUCETI_REQUIRE_TARGET_MARKER",
+        "TAUCETI_WORKER_ID",
+        "TAUCETI_PHASE",
+        "TAUCETI_AGENT",
+        "TAUCETI_MODEL",
+        "TAUCETI_ROUND_ID",
+        *tool_forwarded_environment(selected_tools, phase),
     ):
         val = os.environ.get(var)
         if val:

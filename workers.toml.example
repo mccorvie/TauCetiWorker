@@ -16,5 +16,13 @@ ignore_quota = true
 id = "worker3"
 enabled = true
 only = ["roadmap", "fix", "fix-ci"]
+tools = ["loogle"]
 roadmap_only = "RepresentationTheory"
 source = "https://github.com/FormalFrontier/Etingof-RepresentationTheory-draft1"
+
+
+[[workers]]
+id = "worker4"
+enabled = true
+agent = "codex"
+tools = ["loogle"]
