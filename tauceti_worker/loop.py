@@ -223,6 +223,9 @@ def cmd_loop(args, cfg: Config, *, only: list[str], agent: str) -> int:
             source = getattr(args, "source", None)
             if source is not None:
                 tail += ["--source", source]
+            record_dir = getattr(args, "record_dir", None)
+            if record_dir is not None:
+                tail += ["--record-dir", str(record_dir)]
             report_runtime("surveying", detail="selecting the next work unit", next_action_at=None)
             rc = run_round_subprocess(tail)
 

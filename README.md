@@ -141,6 +141,12 @@ Roadmap rounds steer toward one area, a subdirectory of the
 tauceti work --only roadmap --roadmap-only Topology --source ../existing-library
 ```
 
+Add `--record-dir <path>` (or set `TAUCETI_RECORD_DIR`) to preserve authentic
+pre-agent `fix` and `roadmap` task inputs for TauCetiBench. Captures use shared
+bare Git object stores and content-addressed context/prompt blobs; a recording
+failure is logged but does not block the live round. See
+[record mode](docs/reference.md#record-mode).
+
 Roadmap workers also avoid finer-grained targets other contributors have claimed
 on the [intentions board](https://github.com/leanprover-community/intentions).
 Adjust with `--roadmap-extra-identities` (logins that count as your own side) or

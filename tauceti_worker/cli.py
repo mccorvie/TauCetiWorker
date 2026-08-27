@@ -58,6 +58,7 @@ from .github import GitHub, shared_claims_granted
 from .loop import cmd_loop, resolve_work_model
 from .paths import HERE, ensure_ssl_cert_file
 from .quota import Quota, _claude_keychain_creds, _safe_exists, claude_dir, codex_dir, parse_pace_curve
+from .recording import RecordingError, resolve_record_dir
 from .review_state import ReviewState
 from .round import Claims, RoundContext, cmd_heartbeat
 from .runtime_status import report_failure
@@ -110,6 +111,7 @@ environment (flags win; full reference linked below):
   TAUCETI_AUTHORING_CODEX_MODEL / _EFFORT   exact Codex authoring profile
   TAUCETI_AUTHORING_CLAUDE_MODEL / _EFFORT exact Claude authoring profile
   TAUCETI_STREAM=1       same as --stream
+  TAUCETI_RECORD_DIR     capture fix/roadmap task inputs before agent launch
   TAUCETI_AUTO_REFRESH=1 same as --auto-refresh (renew an expired Claude token; see --auto-refresh)
   TAUCETI_ACCOUNT        default for --account (require a specific Codex account)
   CLAUDE_CONFIG_DIR      Claude config/credential source (Bubble uses a private macOS handoff)
@@ -221,6 +223,13 @@ def add_work_flags(p: argparse.ArgumentParser) -> None:
         "(checked-out/default HEAD) for a new roadmap PR. Requires the roadmap phase to be enabled and "
         "one specific --roadmap-only area; the source is mounted read-only in bubble mode and treated "
         "as non-definitive reference material",
+    )
+    p.add_argument(
+        "--record-dir",
+        default=None,
+        metavar="PATH",
+        help="capture immutable fix/roadmap task inputs under PATH before agent launch "
+        "(default: $TAUCETI_RECORD_DIR; recording failures never block live work)",
     )
     p.add_argument(
         "--roadmap-skip",
@@ -673,6 +682,15 @@ def cmd_work(args, *, only: list[str], agent: str, one_round: bool) -> int:
     source = resolve_source(args, only)
     if source is not None:
         args.source = source
+    try:
+        record_dir = resolve_record_dir(getattr(args, "record_dir", None))
+    except RecordingError as exc:
+        raise Die(f"--record-dir: {exc}") from None
+    if record_dir is not None:
+        # Pin the absolute resolved value for the loop's isolated _round children. The CLI value has
+        # already won over the environment at this point, so every descendant sees one answer.
+        os.environ["TAUCETI_RECORD_DIR"] = str(record_dir)
+        args.record_dir = str(record_dir)
     # --roadmap-skip likewise overrides the env and is inherited by loop children (read live via
     # roadmap_skip()).
     if getattr(args, "roadmap_skip", None) is not None:
@@ -810,6 +828,7 @@ def cmd_work(args, *, only: list[str], agent: str, one_round: bool) -> int:
             sandbox_host=not getattr(args, "bubble", False),
             dry_run=dry,
             source=source,
+            record_dir=record_dir,
             # Either the pacer just selected Claude on an unopened window (one-shot), or the loop did
             # and passed the authorization down (--claude-bootstrap). Same launch-stage gate either way.
             claude_bootstrap=pending_init or getattr(args, "claude_bootstrap", False),

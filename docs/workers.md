@@ -109,6 +109,7 @@ other top-level key is an error, as is any unrecognized field inside a
 | `roadmap_extra_identities` | string list | `[]` | Extra GitHub logins whose claimed intentions count as this worker's own |
 | `respect_claims` | bool | `true` | Whether to avoid intentions others have claimed |
 | `source` | string | unset | Supplementary repository directory or URL. Requires `roadmap` in `only` and a non-empty `roadmap_only` |
+| `record_dir` | string | unset | Enable fail-open pre-agent fix/roadmap capture under this directory |
 | `author_model` | string | unset | Exact authoring model. Requires an `agent` other than `auto` |
 | `author_effort` | string | unset | Authoring reasoning effort for Codex, Claude, or Kiro. Requires an explicit `agent` |
 | `pace` | string | unset | Pacing curve as `time%:budget%` points, for example `0:10,50:70,90:90`; rejected by `apply --check` if malformed |
@@ -167,6 +168,7 @@ entry with `enabled = true`.
 | `--roadmap-only AREA` | `roadmap_only` |
 | `--roadmap-skip AREAS` | `roadmap_skip`, as a comma-separated list |
 | `--source PATH_OR_URL` | `source`; also requires `roadmap` in `--only` and a non-empty `--roadmap-only` |
+| `--record-dir PATH` | `record_dir` |
 | `--author-model MODEL` | `author_model` |
 | `--author-effort EFFORT` | `author_effort`; Codex, Claude, or Kiro only |
 | `--pace CURVE` | `pace` |

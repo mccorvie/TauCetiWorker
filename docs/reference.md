@@ -21,6 +21,7 @@ list is in `tauceti work -h`. For persistent workers, see
 | `--roadmap-only AREA` | The single roadmap area for roadmap rounds (empty = all areas). |
 | `--roadmap-skip AREA[,AREA...]` | Roadmap areas to exclude from selection (`--roadmap-only` wins on overlap). |
 | `--source PATH_OR_URL` | Supplementary local Git repository directory or Git repository URL (checked-out/default `HEAD`) for authoring a PR. A shallow snapshot is stored in worker state, refreshed on later rounds, and mounted read-only in Bubble mode. Requires the roadmap phase to be enabled and one specific `--roadmap-only AREA`; other enabled phases ignore it, and the roadmap and review quality remain authoritative. |
+| `--record-dir PATH` | Enable pre-agent record mode for `fix` and `roadmap`. Captures exact committed source state, normalized task context, and a treatment-neutral phase prompt under `PATH`. Recording is fail-open and never changes live agent execution. |
 | `--roadmap-extra-identities LOGIN[,LOGIN...]` | Extra GitHub logins, beyond your `gh auth` identity, whose claimed intentions the worker treats as its own (won't avoid). |
 | `--ignore-claims` | Don't avoid targets others have claimed on the intentions board (claim-respect is on by default). |
 | `--auto-refresh` | Renew this worker's Claude access token when it expires, instead of reporting Claude unavailable until a human runs `claude` again. Off by default, and only safe when nothing else uses the same credential file — the refresh token is single-use, so the rotation logs out an interactive `claude`, a second refresher, or a copy of the credential elsewhere. See [quota and pacing](quota.md). |
@@ -30,6 +31,25 @@ list is in `tauceti work -h`. For persistent workers, see
 | `--worker-id ID` | Run an independent worker under this name; any id but `default` also isolates its credential directories (`$HOME` on Linux; provider-specific Claude, Codex, and Kiro directories on macOS). |
 | `--isolate-home` | Force that per-worker isolation even for the `default` id (a distinct id already implies it). |
 | `--dry-run` | Survey and print the picker's decision; act on nothing. |
+
+## Record mode
+
+`tauceti work --record-dir PATH` captures benchmark source material after the
+ordinary candidate/claim setup and before the live agent starts. The equivalent
+environment variable is `TAUCETI_RECORD_DIR`; an explicit flag wins. Loop rounds
+and persistent workers inherit the resolved directory.
+
+The store uses shared bare Git repositories plus retained
+`refs/tauceti-record/<capture-id>/...` refs, and content-addressed SHA-256 blobs
+for prompts and normalized GitHub context. A capture is visible only after its
+`capture.json` and `COMPLETE` marker are both present. Re-recording identical
+task inputs reuses the same capture ID. Record mode currently emits
+`fix-review-raw` and `roadmap-opportunity-raw`; other work phases are unchanged.
+
+Capture errors are appended to `errors/recording-errors.jsonl`, logged as
+warnings, and never prevent the selected live work from continuing. Raw captures
+contain no model output, transcript, timing, usage, provider, or offered-tool
+state. See the full [record-mode specification](TAUCETIWORKER_RECORD_MODE_SPEC_REVISED.md).
 
 ## Roadmap backpressure
 
@@ -172,6 +192,7 @@ Flags win over these. Most are tuning knobs with sane defaults.
 | `TAUCETI_AUTO_REFRESH` | _(unset)_ | `1` is the same as `--auto-refresh`. |
 | `TAUCETI_PACE` | _(unset)_ | Pacing curve for `--pace` (`time%:budget%` points); unset = `60:40`. |
 | `TAUCETI_STREAM` | — | `1` is the same as `--stream`. |
+| `TAUCETI_RECORD_DIR` | _(unset)_ | Enable pre-agent fix/roadmap capture under this directory. An explicit `--record-dir` wins. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude config/credential source (account switching; Bubble uses a private transient handoff on macOS). |
 | `ELAN_HOME` | login user's `~/.elan` | Lean toolchains, shared by every worker: an install takes a lock and lands by rename. |
 | `MATHLIB_CACHE_DIR` | `<worker state>/.cache/mathlib` | Where this worker downloads Mathlib artifacts. Private, because `lake exe cache get` takes no lock; finished files are exchanged with the machine pool by hardlink before each round. |

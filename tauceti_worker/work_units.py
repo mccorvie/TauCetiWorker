@@ -59,6 +59,7 @@ from .github import GitHub, GitHubError, claims_repo, ensure_fork, gh_run, me
 from .intentions import claimed_avoid_list
 from .paths import CLAIM_SH, HERE
 from .quota import Quota, _unavail_reason, mirror_creds
+from .recording import RecordConfig, TaskRecorder, record_failure
 from .review_diagnostics import (
     clear_review_failure,
     public_review_failure,
@@ -99,6 +100,7 @@ class RoundOpts:
     sandbox_host: bool  # True = run on the host (the default); False = --bubble (use the sandbox)
     dry_run: bool
     source: str | None = None  # local directory or Git URL used read-only by a single-area roadmap PR
+    record_dir: Path | None = None  # host-side immutable task capture store; never passed to providers
     # Claude was selected while one of its quota windows was reset-but-unopened. The round may spend ONE
     # small claude request to open it — at its LAUNCH STAGE (dispatch), never before there is work.
     claude_bootstrap: bool = False
@@ -780,6 +782,26 @@ def _refund_infra_failure(w, c, label: str, charged: tuple[str, ...]) -> None:
     raise NoProgress(f"{label} #{c.pr}: {reason} — not charged to the PR, will retry after back-off")
 
 
+def _task_recorder(w: Worker, opts: RoundOpts, phase: str, candidate: str | int) -> TaskRecorder | None:
+    """Construct a recorder only when enabled, keeping setup failures fail-open too."""
+    root = getattr(opts, "record_dir", None)
+    if root is None:
+        return None
+    try:
+        config = RecordConfig(Path(root))
+    except Exception as exc:
+        warn_red(
+            f"recording warning: phase={phase} candidate={candidate} code=storage_failed "
+            f"message={str(exc)[:1000]}"
+        )
+        return None
+    try:
+        return TaskRecorder(config, w.gh)
+    except Exception as exc:
+        record_failure(config, phase, candidate, exc)
+        return None
+
+
 def _do_fixlike(
     w: Worker,
     sv: Survey,
@@ -808,7 +830,31 @@ def _do_fixlike(
         return None
     if not w.claims.begin_branch_work(pr, head, p.head_ref, p.head_owner, p.head_repo):
         return None  # claimed elsewhere → caller tries the next candidate
-    prompt = fill_prompt(HERE / "prompts" / prompt_file, PR=pr, AGENT=opts.agent_name, BIN=wrapper_bin(bubble))
+    template = HERE / "prompts" / prompt_file
+    prompt = fill_prompt(template, PR=pr, AGENT=opts.agent_name, BIN=wrapper_bin(bubble))
+    recorder = _task_recorder(w, opts, label, pr)
+    if recorder is not None and label == "fix":
+        # Provider, sandbox path, and worker identity are operational treatment. Keep the captured base
+        # stable while the live prompt continues through the existing exact path above.
+        logical_inputs = {"PR": pr, "AGENT": "TauCetiWorker", "BIN": "scripts"}
+        rendered_base = fill_prompt(template, **logical_inputs)
+        refs = w.cfg.state / "refs"
+        recorder.maybe_capture_fix(
+            pr=pr,
+            expected_head=head,
+            worker_name=w.cfg.wid,
+            template_path=template,
+            rendered_base=rendered_base,
+            logical_inputs=logical_inputs,
+            survey_metadata={
+                "reason": c.reason,
+                "head_branch": p.head_ref,
+                "head_repository": f"{p.head_owner}/{p.head_repo}",
+            },
+            auxiliary_repositories={
+                name: refs / name for name in ("roadmap", "review") if (refs / name / ".git").exists()
+            },
+        )
     if bubble:
         # The PR's head repo (its own fork, for a fork-PR) gets git fetch/push in the bubble. bubble also
         # auto-derives this from a PR target, so it's explicit/testable belt-and-suspenders (kim-em/bubble#320).
@@ -1255,6 +1301,44 @@ def do_roadmap(w, sv, c, opts, bubble) -> int:
   If the PR derives any content from it, name the source repository, commit, and license in the PR
   body, and do not migrate material whose license does not permit it.
 """
+    recorder = _task_recorder(w, opts, "roadmap", only)
+    if recorder is not None:
+        neutral_source_guidance = source_guidance
+        if neutral_source_guidance:
+            neutral_source_guidance = neutral_source_guidance.replace(source_path, "context/source").replace(
+                "available as a worker-owned disposable snapshot", "available read-only"
+            )
+        neutral_inputs = {
+            "ONLY": only,
+            "SKIP": skip_str,
+            "CLAIMED": claimed_str,
+            "AGENT": "TauCetiWorker",
+            "FORK": "fork-owner",
+            "WORKERID": "worker",
+            "ROADMAP_DIR": "context/roadmap/TauCetiRoadmap",
+            "REVIEW_DIR": "context/review",
+            "RUBRICS": "context/review/rubrics.md",
+            "SOURCE_GUIDANCE": neutral_source_guidance,
+            "BIN": "scripts",
+        }
+        recorder.maybe_capture_roadmap(
+            area=only,
+            worker_name=w.cfg.wid,
+            template_path=HERE / "prompts" / "roadmap.md",
+            rendered_base=fill_prompt(HERE / "prompts" / "roadmap.md", **neutral_inputs),
+            logical_inputs=neutral_inputs,
+            skip=skip,
+            claimed=claimed_str,
+            survey_metadata={
+                "candidate_reason": c.reason,
+                "open_pr_count": len(getattr(sv, "open_prs", []) or []),
+            },
+            roadmap_dir=refs / "roadmap",
+            review_dir=refs / "review",
+            rubric_bundle=bundle,
+            source=source,
+            source_dir=source_dir,
+        )
     if bubble:
         mounts = [f"{refs / 'roadmap'}:/opt/roadmap:ro", f"{refs / 'review'}:/opt/review:ro"]
         if bundle is not None:
