@@ -107,6 +107,12 @@ Merging green PRs, closing stuck ones, and de-duplicating are the repo's CI, not
 the worker. A GitHub API failure aborts the round rather than reading as "nothing
 to do", so a transient outage never falls through to authoring.
 
+A review has two outputs with different roles. The head-pinned scoreboard posted
+on the PR is the live verdict that auto-merge reads. Detailed run records are also
+kept in a local outbox for the public TauCetiData analytics/provenance archive;
+failure or lack of permission to publish that archive does not stop the posted
+review from counting.
+
 ## Configure a round
 
 Three independent dials: which work, which agent, and where it runs. Combine
@@ -151,6 +157,8 @@ Roadmap workers also avoid finer-grained targets other contributors have claimed
 on the [intentions board](https://github.com/leanprover-community/intentions).
 Adjust with `--roadmap-extra-identities` (logins that count as your own side) or
 turn it off with `--ignore-claims`; see [the reference](docs/reference.md).
+Assigned intentions carrying the maintainer-applied `administrative-hold` label are binding for
+every worker, including the assignee's own workers, and cannot be disabled by those options.
 
 ### Which agent: `--agent`
 
