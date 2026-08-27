@@ -151,7 +151,8 @@ Add `--record-dir <path>` (or set `TAUCETI_RECORD_DIR`) to preserve authentic
 pre-agent `fix` and `roadmap` task inputs for TauCetiBench. Captures use shared
 bare Git object stores and content-addressed context/prompt blobs; a recording
 failure is logged but does not block the live round. See
-[record mode](docs/reference.md#record-mode).
+[record mode](docs/record-mode.md), including the TauCetiBench import and
+reproducibility contract.
 
 Roadmap workers also avoid finer-grained targets other contributors have claimed
 on the [intentions board](https://github.com/leanprover-community/intentions).
@@ -330,6 +331,8 @@ and that bootstrap in detail.
 
 ## Further documentation
 
+- [Record mode](docs/record-mode.md): capture production, the on-disk format,
+  and the TauCetiBench import and reproducibility contract.
 - [Persistent workers](docs/workers.md): the `workers.toml` schema, every
   `tauceti workers` action, state on disk, and running past logout.
 - [`tauceti work` reference](docs/reference.md): every flag and environment

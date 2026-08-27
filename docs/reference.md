@@ -49,7 +49,8 @@ task inputs reuses the same capture ID. Record mode currently emits
 Capture errors are appended to `errors/recording-errors.jsonl`, logged as
 warnings, and never prevent the selected live work from continuing. Raw captures
 contain no model output, transcript, timing, usage, provider, or offered-tool
-state. See the full [record-mode specification](TAUCETIWORKER_RECORD_MODE_SPEC_REVISED.md).
+state. The [record-mode and TauCetiBench import guide](record-mode.md) documents
+the complete on-disk contract, validation rules, and task extraction procedure.
 
 ## Roadmap backpressure
 
