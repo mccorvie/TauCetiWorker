@@ -53,6 +53,22 @@ def make_repo(root: Path, name: str, *, dependencies: bool = False) -> tuple[Pat
     return repo, git(repo, "rev-parse", "HEAD")
 
 
+def shallow_clone(source: Path, destination: Path) -> Path:
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", source.as_uri(), str(destination)],
+        check=True,
+    )
+    return destination
+
+
+def materialize(store: Path, retained_ref: str, destination: Path) -> str:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    git(destination.parent, "init", "-q", str(destination))
+    git(destination, "fetch", "-q", "--no-tags", str(store), retained_ref)
+    git(destination, "checkout", "-q", "--detach", "FETCH_HEAD")
+    return git(destination, "rev-parse", "HEAD")
+
+
 class FakeGitHub:
     repo = "TauCetiProject/TauCeti"
 
@@ -187,23 +203,31 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
     same = recorder.capture_fix(**{**kwargs, "worker_name": "worker2"})
     check("re-recording the same task reuses its capture ID", same == cid)
 
-    roadmap, _ = make_repo(tmp, "TauCetiRoadmap")
-    area_dir = roadmap / "TauCetiRoadmap" / "Algebra"
+    roadmap_origin, _ = make_repo(tmp, "TauCetiRoadmap-origin")
+    area_dir = roadmap_origin / "TauCetiRoadmap" / "Algebra"
     area_dir.mkdir(parents=True)
     (area_dir / "README.md").write_text("# Algebra roadmap\n")
-    git(roadmap, "add", ".")
-    git(roadmap, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "area")
-    review, _ = make_repo(tmp, "TauCetiReview")
-    (review / "rubrics").mkdir()
+    git(roadmap_origin, "add", ".")
+    git(roadmap_origin, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "area")
+    roadmap = shallow_clone(roadmap_origin, tmp / "TauCetiRoadmap")
+    review_origin, _ = make_repo(tmp, "TauCetiReview-origin")
+    (review_origin / "rubrics").mkdir()
+    rubric_origin = review_origin / "rubrics" / "rubrics.md"
+    rubric_origin.write_text("# Review rubric\n")
+    git(review_origin, "add", ".")
+    git(review_origin, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "rubric")
+    review = shallow_clone(review_origin, tmp / "TauCetiReview")
     rubric = review / "rubrics" / "rubrics.md"
-    rubric.write_text("# Review rubric\n")
-    git(review, "add", ".")
-    git(review, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "rubric")
     recorder.remotes.update(
         {
-            "TauCetiProject/TauCetiRoadmap": roadmap,
-            "TauCetiProject/TauCetiReview": review,
+            "TauCetiProject/TauCetiRoadmap": roadmap_origin,
+            "TauCetiProject/TauCetiReview": review_origin,
         }
+    )
+    check(
+        "roadmap and review task checkouts are genuinely shallow",
+        git(roadmap, "rev-parse", "--is-shallow-repository") == "true"
+        and git(review, "rev-parse", "--is-shallow-repository") == "true",
     )
     roadmap_prompt = tmp / "roadmap.md"
     roadmap_prompt.write_text("Implement __ONLY__; skip __SKIP__; context __ROADMAP_DIR__; __SOURCE_GUIDANCE__\n")
@@ -233,6 +257,19 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
     check(
         "roadmap capture retains all three required repositories",
         set(roadmap_manifest["repositories"]) == {"tauceti", "roadmap", "review"},
+    )
+    store_names = {"tauceti": "TauCeti.git", "roadmap": "TauCetiRoadmap.git", "review": "TauCetiReview.git"}
+    imported = {
+        name: materialize(
+            store_root / "git" / store_names[name],
+            repository["retained_ref"],
+            tmp / "imports" / name,
+        )
+        for name, repository in roadmap_manifest["repositories"].items()
+    }
+    check(
+        "fresh importer fetch and checkout succeeds for every roadmap repository",
+        imported == {name: repository["sha"] for name, repository in roadmap_manifest["repositories"].items()},
     )
 
     gh.raced = True
