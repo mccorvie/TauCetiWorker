@@ -171,6 +171,19 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
     check("retained ref survives source-branch deletion", objects.verify(head, retained))
     check("retained object reconstructs captured files", objects.read_file(head, "feature.txt") == b"captured\n")
 
+    damaged_origin, _ = make_repo(tmp, "DamagedHistory")
+    (damaged_origin / "second.txt").write_text("second\n")
+    git(damaged_origin, "add", ".")
+    git(damaged_origin, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "second")
+    damaged_head = git(damaged_origin, "rev-parse", "HEAD")
+    damaged_parent = git(damaged_origin, "rev-parse", "HEAD^")
+    damaged_store = GitObjectStore(store_root, "DamagedHistory")
+    damaged_ref = "refs/tauceti-record/tc-damaged/main"
+    damaged_store.retain(damaged_origin, damaged_head, damaged_ref)
+    parent_object = damaged_store.path / "objects" / damaged_parent[:2] / damaged_parent[2:]
+    parent_object.unlink()
+    check("retained ref verification rejects missing reachable history", not damaged_store.verify(damaged_head, damaged_ref))
+
     prompt = tmp / "fix.md"
     prompt.write_text("Fix PR __PR__ as __AGENT__; wrappers: __BIN__.\n")
     gh = FakeGitHub(head, base)

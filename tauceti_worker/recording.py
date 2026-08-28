@@ -237,6 +237,16 @@ class GitObjectStore:
         )
         return proc.returncode == 0
 
+    def has_connected_history(self, sha: str) -> bool:
+        """Whether Git can traverse every object reachable from *sha*."""
+        if not self.has_commit(sha):
+            return False
+        proc = subprocess.run(
+            ["git", "--git-dir", str(self.path), "rev-list", "--objects", sha],
+            capture_output=True,
+        )
+        return proc.returncode == 0
+
     def retain(self, remote: str | Path, sha: str, retained_ref: str, *, fetch_ref: str | None = None) -> None:
         """Fetch *sha* if needed, point *retained_ref* at it, and verify the exact target."""
         if not _SHA_RE.fullmatch(sha):
@@ -268,7 +278,10 @@ class GitObjectStore:
 
     def verify(self, sha: str, retained_ref: str) -> bool:
         try:
-            return self._git("rev-parse", f"{retained_ref}^{{commit}}") == sha and self.has_commit(sha)
+            return (
+                self._git("rev-parse", f"{retained_ref}^{{commit}}").lower() == sha.lower()
+                and self.has_connected_history(sha)
+            )
         except RecordingError:
             return False
 
