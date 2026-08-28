@@ -1110,3 +1110,143 @@ def resolve_record_dir(cli_value: str | Path | None, env: dict[str, str] | None 
     if not text:
         raise RecordingError("storage_failed", "record directory must not be empty")
     return Path(text).expanduser().resolve()
+
+
+def _manifest_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    repositories = manifest["repositories"]
+    prompt = manifest["prompt"]
+    prompt_identity = {key: prompt[key]["digest"] for key in ("template", "rendered_base", "logical_inputs")}
+    context_identity = {key: ref["digest"] for key, ref in manifest["context"].items()}
+    if manifest["phase"] == "fix" and manifest["capture_type"] == "fix-review-raw":
+        tau = repositories["tauceti"]
+        git_identity = {
+            "head": tau["pr_head_sha"],
+            "base_branch": tau["base"]["branch"],
+            "base": tau["base"]["sha"],
+        }
+        for key in ("roadmap", "review"):
+            if key in repositories:
+                git_identity[key] = repositories[key]["sha"]
+        return {
+            "schema": CAPTURE_SCHEMA,
+            "phase": "fix",
+            "capture_type": "fix-review-raw",
+            "candidate": {"repository": manifest["candidate"]["repository"], "pr": manifest["candidate"]["pr"]},
+            "git": git_identity,
+            "context": context_identity,
+            "prompt": prompt_identity,
+        }
+    if manifest["phase"] == "roadmap" and manifest["capture_type"] == "roadmap-opportunity-raw":
+        git_identity = {
+            "main": repositories["tauceti"]["sha"],
+            "roadmap": repositories["roadmap"]["sha"],
+            "review": repositories["review"]["sha"],
+        }
+        if "source" in repositories:
+            git_identity["source"] = repositories["source"]["sha"]
+        return {
+            "schema": CAPTURE_SCHEMA,
+            "phase": "roadmap",
+            "capture_type": "roadmap-opportunity-raw",
+            "area": manifest["candidate"]["roadmap_area"],
+            "git": git_identity,
+            "context": context_identity,
+            "prompt": prompt_identity,
+        }
+    raise RecordingError("validation_failed", "unsupported phase/capture_type pair")
+
+
+def _manifest_repositories(root: Path, manifest: dict[str, Any]) -> list[tuple[str, GitObjectStore, str, str]]:
+    found = []
+    for key, repository in manifest["repositories"].items():
+        if key == "tauceti" and "pr_head_sha" in repository:
+            store = GitObjectStore(root, "TauCeti")
+            found.append(("tauceti-head", store, repository["pr_head_sha"], repository["head_retained_ref"]))
+            base = repository["base"]
+            found.append(("tauceti-base", store, base["sha"], base["retained_ref"]))
+            continue
+        default = {"tauceti": "TauCeti", "roadmap": "TauCetiRoadmap", "review": "TauCetiReview"}.get(key)
+        store_name = repository.get("store") or default
+        if not isinstance(store_name, str) or Path(store_name).is_absolute() or ".." in Path(store_name).parts:
+            raise RecordingError("validation_failed", f"unsafe Git store for {key}")
+        found.append((key, GitObjectStore(root, store_name), repository["sha"], repository["retained_ref"]))
+    return found
+
+
+def validate_record_store(root: str | Path) -> list[str]:
+    """Validate every complete capture, including a fresh fetch/checkout of each retained ref."""
+    store_root = Path(root).expanduser().resolve()
+    try:
+        store_format = json.loads((store_root / "format.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecordingError("validation_failed", f"cannot read record-store format: {exc}") from exc
+    if store_format != FORMAT:
+        raise RecordingError("validation_failed", "unsupported record-store format")
+    captures_root = store_root / "captures"
+    blobs = BlobStore(store_root)
+    validated: list[str] = []
+    try:
+        children = sorted(captures_root.iterdir())
+    except OSError as exc:
+        raise RecordingError("validation_failed", f"cannot enumerate captures: {exc}") from exc
+    for capture_dir in children:
+        if not capture_dir.is_dir() or not re.fullmatch(r"tc-[0-9a-f]{24}", capture_dir.name):
+            continue
+        try:
+            complete = capture_dir / "COMPLETE"
+            if not complete.is_file() or complete.stat().st_size != 0:
+                continue
+            manifest = json.loads((capture_dir / "capture.json").read_text(encoding="utf-8"))
+            if manifest.get("schema") != CAPTURE_SCHEMA or manifest.get("capture_id") != capture_dir.name:
+                raise RecordingError("validation_failed", f"{capture_dir.name}: manifest identity mismatch")
+            if manifest.get("fidelity") != "materialized-context" or manifest.get("purpose") != "benchmark-corpus":
+                raise RecordingError("validation_failed", f"{capture_dir.name}: unsupported fidelity or purpose")
+            CaptureBuilder(RecordConfig(store_root), blobs)._verify_blob_refs(manifest)
+            decoded_context = {
+                key: json.loads(blobs.path(ref["digest"]).read_text(encoding="utf-8"))
+                for key, ref in manifest.get("context", {}).items()
+            }
+            json.loads(blobs.path(manifest["prompt"]["logical_inputs"]["digest"]).read_text(encoding="utf-8"))
+            if "roadmap" in decoded_context and decoded_context["roadmap"].get("schema") != (
+                "tauceti.record.roadmap-context/v1"
+            ):
+                raise RecordingError("validation_failed", f"{capture_dir.name}: invalid roadmap-context schema")
+            if "unresolved_findings" in decoded_context and decoded_context["unresolved_findings"].get(
+                "algorithm"
+            ) != "tauceti.record.unresolved-findings/v1":
+                raise RecordingError("validation_failed", f"{capture_dir.name}: invalid unresolved-findings algorithm")
+            identity = _manifest_identity(manifest)
+            cid, digest = capture_id(identity)
+            if cid != capture_dir.name or digest != manifest.get("integrity", {}).get("canonical_identity_sha256"):
+                raise RecordingError("validation_failed", f"{capture_dir.name}: canonical identity mismatch")
+            if not all(value is True for value in manifest["integrity"].values() if isinstance(value, bool)):
+                raise RecordingError("validation_failed", f"{capture_dir.name}: capture-time integrity check failed")
+            repositories = _manifest_repositories(store_root, manifest)
+            for label, git_store, sha, retained_ref in repositories:
+                if not git_store.verify(sha, retained_ref):
+                    raise RecordingError("validation_failed", f"{capture_dir.name}: invalid Git history for {label}")
+                with tempfile.TemporaryDirectory(prefix=f"{capture_dir.name}-{label}-") as raw:
+                    task = Path(raw) / "repo"
+                    _run(["git", "init", "-q", str(task)], code="validation_failed")
+                    _run(
+                        ["git", "-C", str(task), "fetch", "-q", "--no-tags", str(git_store.path), retained_ref],
+                        code="validation_failed",
+                    )
+                    _run(["git", "-C", str(task), "checkout", "-q", "--detach", "FETCH_HEAD"], code="validation_failed")
+                    if _git_sha(task) != sha.lower():
+                        raise RecordingError("validation_failed", f"{capture_dir.name}: materialized {label} at wrong SHA")
+            tau = manifest["repositories"]["tauceti"]
+            tau_sha = tau.get("pr_head_sha") or tau.get("sha")
+            tau_store = GitObjectStore(store_root, "TauCeti")
+            if "pr_head_sha" in tau and tau_store.merge_base(tau["pr_head_sha"], tau["base"]["sha"]) != tau[
+                "merge_base_sha"
+            ]:
+                raise RecordingError("validation_failed", f"{capture_dir.name}: merge base mismatch")
+            for key, path in (("lean_toolchain", "lean-toolchain"), ("lake_manifest", "lake-manifest.json")):
+                ref = manifest["dependency_state"][key]
+                if tau_store.read_file(tau_sha, path) != blobs.path(ref["digest"]).read_bytes():
+                    raise RecordingError("validation_failed", f"{capture_dir.name}: dependency blob differs from Git")
+            validated.append(capture_dir.name)
+        except (KeyError, TypeError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RecordingError("validation_failed", f"{capture_dir.name}: malformed capture: {exc}") from exc
+    return validated

@@ -22,6 +22,7 @@ from tauceti_worker.recording import (  # noqa: E402
     TaskRecorder,
     capture_id,
     resolve_record_dir,
+    validate_record_store,
 )
 
 fails = 0
@@ -284,6 +285,7 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
         "fresh importer fetch and checkout succeeds for every roadmap repository",
         imported == {name: repository["sha"] for name, repository in roadmap_manifest["repositories"].items()},
     )
+    check("store validator admits both complete captures", validate_record_store(store_root) == sorted([cid, roadmap_cid]))
 
     gh.raced = True
     before = set((store_root / "captures").iterdir())
@@ -328,6 +330,11 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
 
     parsed = build_parser().parse_args(["work", "--record-dir", str(tmp / "cli")])
     check("work CLI accepts --record-dir", parsed.record_dir == str(tmp / "cli"))
+    parsed_records = build_parser().parse_args(["records", "validate", str(store_root)])
+    check(
+        "records validate CLI accepts a store path",
+        parsed_records.records_cmd == "validate" and parsed_records.path == store_root,
+    )
     spec = WorkerSpec(id="recorder", record_dir=str(tmp / "persistent"))
     check("persistent workers forward record_dir", spec.work_argv()[-2:] == ["--record-dir", str(tmp / "persistent")])
 

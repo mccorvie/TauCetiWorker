@@ -120,6 +120,15 @@ task-defining inputs reuses the same capture ID.
 Consumers should reject unknown store or capture schemas. A future schema may
 change identity fields, normalization, limits, or extraction semantics.
 
+Operators can run the importer-grade validation locally:
+
+```bash
+tauceti records validate /var/lib/tauceti/records
+```
+
+The command verifies complete manifests, identities, blobs, connected Git
+history, dependency pins, and a fresh fetch/checkout of every retained ref.
+
 ## Blob references
 
 Every non-Git payload in a manifest is represented by:

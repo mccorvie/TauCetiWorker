@@ -58,7 +58,7 @@ from .github import GitHub, shared_claims_granted
 from .loop import cmd_loop, resolve_work_model
 from .paths import HERE, ensure_ssl_cert_file
 from .quota import Quota, _claude_keychain_creds, _safe_exists, claude_dir, codex_dir, parse_pace_curve
-from .recording import RecordingError, resolve_record_dir
+from .recording import RecordingError, resolve_record_dir, validate_record_store
 from .review_state import ReviewState
 from .round import Claims, RoundContext, cmd_heartbeat
 from .runtime_status import report_failure
@@ -470,6 +470,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="check the environment (tools, bubble, quota creds)")
 
+    records = sub.add_parser("records", help="inspect and validate record-mode stores")
+    records_sub = records.add_subparsers(dest="records_cmd", required=True)
+    records_validate = records_sub.add_parser("validate", help="validate every complete capture")
+    records_validate.add_argument("path", type=Path, help="record-store root")
+
     add_workers_parser(sub)
 
     # Hidden internal subcommands.
@@ -550,6 +555,13 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_work(args, only=only, agent=agent, one_round=(cmd == "_round"))
     if cmd == "doctor":
         return cmd_doctor(args)
+    if cmd == "records":
+        try:
+            captures = validate_record_store(args.path)
+        except RecordingError as exc:
+            raise Die(f"records validate: {exc}") from None
+        print(f"validated {len(captures)} complete capture(s) in {args.path.expanduser().resolve()}")
+        return 0
     if cmd == "workers":
         return cmd_workers(args)
     if cmd == "_heartbeat":
