@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import is_git_url, log, warn_red
-from .constants import ROADMAP, TAUCETI
+from .constants import REVIEW, ROADMAP, TAUCETI
 from .paths import HERE
 
 CAPTURE_SCHEMA = "tauceti.record.capture/v1"
@@ -757,6 +757,38 @@ class TaskRecorder:
     def _repo_remote(self, repo: str) -> str:
         return f"https://github.com/{repo}.git"
 
+    def _archive_remote(self, name: str, checkout: Path) -> str | Path:
+        """Return an ancestry-complete source for a repository snapshot.
+
+        Roadmap, Review, and URL-backed supplementary checkouts are deliberately shallow in the
+        live worker. Fetching from those checkouts copies a commit whose parents are absent into the
+        record store, producing a bare repository that cannot serve the documented importer fetch.
+        Archive known repositories, and any supplementary checkout with a network origin, from the
+        authoritative remote instead. A local-only repository is acceptable only when it is complete.
+        """
+        known = {"roadmap": ROADMAP, "review": REVIEW}
+        if name in known:
+            return self._repo_remote(known[name])
+        try:
+            remote = _run(
+                ["git", "-C", str(checkout), "config", "--get", "remote.origin.url"],
+                code="unsupported_source",
+            )
+        except RecordingError:
+            remote = ""
+        if remote and is_git_url(remote) and not remote.lower().startswith("file:"):
+            return remote
+        shallow = _run(
+            ["git", "-C", str(checkout), "rev-parse", "--is-shallow-repository"],
+            code="unsupported_source",
+        )
+        if shallow == "true":
+            raise RecordingError(
+                "unsupported_source",
+                f"{name} is shallow and has no ancestry-complete network origin",
+            )
+        return checkout
+
     def _source_description(self, source: str | None, source_dir: Path | None) -> dict[str, str] | None:
         if source is None:
             return None
@@ -852,7 +884,7 @@ class TaskRecorder:
             path = (auxiliary_repositories or {})[name]
             store = GitObjectStore(self.config.root, "TauCetiRoadmap" if name == "roadmap" else "TauCetiReview")
             retained = f"refs/tauceti-record/{cid}/{name}"
-            store.retain(path, sha, retained)
+            store.retain(self._archive_remote(name, path), sha, retained)
             repositories[name] = {"sha": sha, "retained_ref": retained}
             verified.append((store, sha, retained))
 
@@ -950,8 +982,20 @@ class TaskRecorder:
         verified: list[tuple[GitObjectStore, str, str]] = []
         sources = (
             ("tauceti", GitObjectStore(self.config.root, "TauCeti"), self._repo_remote(TAUCETI), main_sha, "main"),
-            ("roadmap", GitObjectStore(self.config.root, "TauCetiRoadmap"), roadmap_dir, roadmap_sha, "roadmap"),
-            ("review", GitObjectStore(self.config.root, "TauCetiReview"), review_dir, review_sha, "review"),
+            (
+                "roadmap",
+                GitObjectStore(self.config.root, "TauCetiRoadmap"),
+                self._archive_remote("roadmap", roadmap_dir),
+                roadmap_sha,
+                "roadmap",
+            ),
+            (
+                "review",
+                GitObjectStore(self.config.root, "TauCetiReview"),
+                self._archive_remote("review", review_dir),
+                review_sha,
+                "review",
+            ),
         )
         for key, store, remote, sha, ref_name in sources:
             retained = f"refs/tauceti-record/{cid}/{ref_name}"
@@ -963,7 +1007,7 @@ class TaskRecorder:
             source_name = sha256_bytes((source or str(source_dir)).encode())[:16]
             store = GitObjectStore(self.config.root, f"sources/{source_name}")
             retained = f"refs/tauceti-record/{cid}/source-{source_name}"
-            store.retain(source_dir, source_sha, retained)
+            store.retain(self._archive_remote("source", source_dir), source_sha, retained)
             repositories["source"] = {
                 "identity": source_description,
                 "sha": source_sha,

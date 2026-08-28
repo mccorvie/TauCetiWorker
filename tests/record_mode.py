@@ -161,7 +161,9 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
 
     class FixtureRecorder(TaskRecorder):
         def _repo_remote(self, repo):
-            return str(origin)
+            return str(self.remotes.get(repo, origin))
+
+    FixtureRecorder.remotes = {}
 
     recorder = FixtureRecorder(RecordConfig(store_root), gh, worker_root=REPO)
     kwargs = {
@@ -197,6 +199,12 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
     rubric.write_text("# Review rubric\n")
     git(review, "add", ".")
     git(review, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "rubric")
+    recorder.remotes.update(
+        {
+            "TauCetiProject/TauCetiRoadmap": roadmap,
+            "TauCetiProject/TauCetiReview": review,
+        }
+    )
     roadmap_prompt = tmp / "roadmap.md"
     roadmap_prompt.write_text("Implement __ONLY__; skip __SKIP__; context __ROADMAP_DIR__; __SOURCE_GUIDANCE__\n")
     roadmap_inputs = {
