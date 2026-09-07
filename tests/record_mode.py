@@ -19,6 +19,7 @@ from tauceti_worker.recording import (  # noqa: E402
     GitObjectStore,
     RecordConfig,
     RecordingError,
+    RoadmapContextMaterializer,
     TaskRecorder,
     capture_id,
     resolve_record_dir,
@@ -196,6 +197,7 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
     FixtureRecorder.remotes = {}
 
     recorder = FixtureRecorder(RecordConfig(store_root), gh, worker_root=REPO)
+    check("a newly initialized empty store validates", validate_record_store(store_root) == [])
     kwargs = {
         "pr": 7,
         "expected_head": head,
@@ -286,6 +288,57 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
         imported == {name: repository["sha"] for name, repository in roadmap_manifest["repositories"].items()},
     )
     check("store validator admits both complete captures", validate_record_store(store_root) == sorted([cid, roadmap_cid]))
+
+    bounded_root = tmp / "bounded-roadmaps"
+    bounded_dir = bounded_root / "TauCetiRoadmap"
+    bounded_dir.mkdir(parents=True)
+    for index in range(6):
+        (bounded_dir / f"roadmap-{index}.md").write_text("x" * 900_000)
+    bounded = RoadmapContextMaterializer(gh).materialize(
+        area="Algebra",
+        skip=[],
+        claimed="none",
+        survey_metadata={},
+        roadmap_dir=bounded_root,
+        rubric_bundle=None,
+        source=None,
+    )
+    check("roadmap context above the old 5 MB bound is accepted", len(bounded["roadmap_files"]) == 6)
+    for index in range(6, 18):
+        (bounded_dir / f"roadmap-{index}.md").write_text("x" * 900_000)
+    try:
+        RoadmapContextMaterializer(gh).materialize(
+            area="Algebra",
+            skip=[],
+            claimed="none",
+            survey_metadata={},
+            roadmap_dir=bounded_root,
+            rubric_bundle=None,
+            source=None,
+        )
+        check("roadmap context above the 16 MB bound is rejected", False)
+    except RecordingError as exc:
+        check(
+            "roadmap context above the 16 MB bound is rejected",
+            exc.code == "context_normalization_failed" and "16000000-byte aggregate limit" in str(exc),
+        )
+
+    class FailedGitHub(FakeGitHub):
+        last_error = 'Unknown JSON field: "baseRefOid"'
+
+        def pr_view(self, pr, fields):
+            return None
+
+    try:
+        from tauceti_worker.recording import FixContextMaterializer
+
+        FixContextMaterializer(FailedGitHub(head, base)).materialize(7, {})
+        check("GitHub materialization exposes the underlying gh diagnostic", False)
+    except RecordingError as exc:
+        check(
+            "GitHub materialization exposes the underlying gh diagnostic",
+            exc.code == "github_read_failed" and "baseRefOid" in str(exc),
+        )
 
     gh.raced = True
     before = set((store_root / "captures").iterdir())

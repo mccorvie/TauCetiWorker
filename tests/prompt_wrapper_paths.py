@@ -16,7 +16,7 @@ This harness pins the four properties that keep that true:
   2. Every prompt that invokes a wrapper invokes it through `__BIN__`, never bare.
   3. Every bundled prompt renders with no placeholder left, using exactly the keys its call site
      passes — a leaked `__BIN__/git-safe-push` is the very failure being fixed.
-  4. The bump and CI-repair prompts run the expired-shim gate and tell the worker how to migrate.
+  4. Every authoring/fix prompt runs the full CI suite; bump and CI-repair also explain shim migration.
   5. `fill_prompt` raises on an unfilled placeholder in a bundled prompt, and stays quiet for a
      prompt served from elsewhere (TauCetiProgress owns the progress prompt's placeholder set).
 
@@ -106,9 +106,15 @@ def main():
         )
     check("every bundled prompt has a call site", {p.name for p in PROMPTS.glob("*.md")} == set(CALL_SITES))
 
-    # 4) Shim expiry is an autonomous repair input, not a notification-only dead end. Both workers
-    # reproduce and verify the gate, and both know the registry is part of the source-only fix.
+    # 4) Every code-writing phase reproduces the complete build check before it pushes.
     shim_command = "python3 scripts/check-expired-mathlib-shims.py"
+    full_ci = (shim_command, "lake build", "lake exe axioms", "lake exe module-system", "bash scripts/lint-env.sh")
+    for name in ("roadmap.md", "fix.md", "fix-ci.md"):
+        prompt = (PROMPTS / name).read_text()
+        for command in full_ci:
+            check(f"{name}: requires {command}", command in prompt)
+
+    # Bump and CI repair additionally explain how to migrate an expired shim.
     for name in ("bump.md", "fix-ci.md"):
         prompt = (PROMPTS / name).read_text()
         check(f"{name}: reproduces and verifies shim expiry", prompt.count(shim_command) == 2)

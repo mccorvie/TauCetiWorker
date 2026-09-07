@@ -318,6 +318,7 @@ def gh_run(argv: list[str], *, cwd: Path | None = None, max_wait: int = GH_INROU
 class GitHub:
     def __init__(self, repo: str = TAUCETI):
         self.repo = repo
+        self.last_error = ""
 
     def _gh(self, args: list[str]) -> subprocess.CompletedProcess:
         return gh_run(["gh", *args])
@@ -348,8 +349,15 @@ class GitHub:
     def pr_view(self, pr: int, fields: list[str]) -> dict | None:
         p = self._gh(["pr", "view", str(pr), "--repo", self.repo, "--json", ",".join(fields)])
         if p.returncode != 0:
+            self.last_error = (p.stderr or p.stdout or "gh pr view failed").strip()
             return None
-        return json.loads(p.stdout or "{}")
+        try:
+            value = json.loads(p.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            self.last_error = f"gh pr view returned invalid JSON: {exc}"
+            return None
+        self.last_error = ""
+        return value
 
     @staticmethod
     def _stuck_issue_body(pr: int, reason: str, diagnostic: str = "") -> str:
@@ -426,22 +434,30 @@ class GitHub:
         """All issue comments for a PR (paginated). None on fetch failure (distinct from empty)."""
         p = self._gh(["api", "--paginate", f"/repos/{self.repo}/issues/{pr}/comments?per_page=100"])
         if p.returncode != 0:
+            self.last_error = (p.stderr or p.stdout or "gh issue comments request failed").strip()
             return None
         try:
-            return json.loads(p.stdout or "[]")
-        except json.JSONDecodeError:
+            value = json.loads(p.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            self.last_error = f"gh issue comments returned invalid JSON: {exc}"
             return None
+        self.last_error = ""
+        return value
 
     def review_comments(self, pr: int) -> list[dict] | None:
         """All review (inline / thread) comments for a PR — distinct from issue_comments. A contested
         fix replies on a review thread, so the progress guard must count these too. None on failure."""
         p = self._gh(["api", "--paginate", f"/repos/{self.repo}/pulls/{pr}/comments?per_page=100"])
         if p.returncode != 0:
+            self.last_error = (p.stderr or p.stdout or "gh review comments request failed").strip()
             return None
         try:
-            return json.loads(p.stdout or "[]")
-        except json.JSONDecodeError:
+            value = json.loads(p.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            self.last_error = f"gh review comments returned invalid JSON: {exc}"
             return None
+        self.last_error = ""
+        return value
 
     def pr_progress_state(self, pr: int) -> dict | None:
         """{'head': <headRefOid>, 'ncomments': <issue + review-thread comments>} in ONE GraphQL request,

@@ -67,16 +67,26 @@ Make only fixes you can justify against a rubric. Do NOT broaden the PR, add spe
 generality, or invent findings to look diligent: scope is itself a rubric, and a sound small PR
 beats a padded one. If nothing needs changing, say so and move on. Then verify, once:
 
-## Verify before pushing (all three MUST pass)
+## Verify before pushing (ALL of these MUST pass — they are exactly what the `build` check runs)
 ```
 lake exe cache get
+git fetch -q origin main
+shim_args=(--fail-on-available); base_shims="$(mktemp)"; base_root="$(mktemp -d)"; have_base=0
+base_ref="$(git merge-base origin/main HEAD)"
+if git show "$base_ref":TauCeti/mathlib-shims.json > "$base_shims" 2>/dev/null; then git archive "$base_ref" TauCeti | tar -x -C "$base_root"; shim_args+=(--base-manifest "$base_shims" --base-root "$base_root"); have_base=1; fi
+if [ "$have_base" = 1 ] && git diff --quiet "$base_ref" -- lake-manifest.json lean-toolchain; then shim_args+=(--only-new); fi
+if [ -f scripts/check-expired-mathlib-shims.py ]; then python3 scripts/check-expired-mathlib-shims.py "${shim_args[@]}"; fi
+rm -f "$base_shims"; rm -rf "$base_root"
 lake build
 lake exe axioms
+lake exe module-system
+bash scripts/lint-env.sh
 ```
-If `lake build` is red, FIX IT or retreat (below). Never push red.
+If any command is red, FIX IT or retreat (below). A green `lake build` alone is not sufficient;
+never push an axiom, module-system, shim-expiry, or lint failure.
 
 
-**Do this synchronously, in this one turn.** Run the three commands in the FOREGROUND and wait for each to finish — do NOT background the build and then end your turn expecting to be resumed. You are running non-interactively; nothing will resume you, so a build left running in the background is abandoned and the round ends with nothing committed or pushed. Do not yield, stop, or end your turn until you have committed, pushed, and opened the PR (below). Pushing is the only thing that preserves your work.
+**Do this synchronously, in this one turn.** Run these commands in the FOREGROUND and wait for each to finish — do NOT background the build and then end your turn expecting to be resumed. You are running non-interactively; nothing will resume you, so a build left running in the background is abandoned and the round ends with nothing committed or pushed. Do not yield, stop, or end your turn until you have committed, pushed, and opened the PR (below). Pushing is the only thing that preserves your work.
 
 ## If the target won't close
 Never downgrade to a lookalike: a weakened statement, a degenerate special case, or scaffolding carrying the result's name. Retreat one rung at a time:

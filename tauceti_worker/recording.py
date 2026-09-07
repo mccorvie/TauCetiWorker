@@ -31,6 +31,8 @@ RECORDER_VERSION = "1"
 FORMAT = {"schema": "tauceti.record.store/v1", "capture_schema": CAPTURE_SCHEMA}
 OPEN_PR_LIMIT = 100
 MERGED_PR_LIMIT = 50
+ROADMAP_FILE_MAX_BYTES = 1_000_000
+ROADMAP_TOTAL_MAX_BYTES = 16_000_000
 
 _SECRET_KEYS = {
     "anthropic_api_key",
@@ -130,6 +132,16 @@ def _run(argv: list[str], *, cwd: Path | None = None, code: str = "storage_faile
         detail = (proc.stderr or proc.stdout or "no diagnostic").strip()[-1000:]
         raise RecordingError(code, f"{' '.join(argv[:4])} failed: {detail}")
     return (proc.stdout or "").strip()
+
+
+def _process_detail(proc: subprocess.CompletedProcess) -> str:
+    """Bound a subprocess diagnostic before it reaches the operational error log."""
+    return (proc.stderr or proc.stdout or "no diagnostic").strip()[-1000:]
+
+
+def _github_read_error(github: Any, message: str) -> RecordingError:
+    detail = str(getattr(github, "last_error", "") or "").strip()[-1000:]
+    return RecordingError("github_read_failed", f"{message}: {detail}" if detail else message)
 
 
 def _git_sha(repo: Path, ref: str = "HEAD", *, required: bool = True) -> str | None:
@@ -465,7 +477,9 @@ class FixContextMaterializer:
             return []
         proc = runner(["api", "--paginate", f"/repos/{self.github.repo}/pulls/{pr}/reviews?per_page=100"])
         if proc.returncode:
-            raise RecordingError("github_read_failed", f"could not read submitted reviews for PR #{pr}")
+            raise RecordingError(
+                "github_read_failed", f"could not read submitted reviews for PR #{pr}: {_process_detail(proc)}"
+            )
         try:
             return json.loads(proc.stdout or "[]")
         except json.JSONDecodeError as exc:
@@ -497,7 +511,9 @@ class FixContextMaterializer:
                 ]
             )
             if proc.returncode:
-                raise RecordingError("github_read_failed", f"could not read review-thread status for PR #{pr}")
+                raise RecordingError(
+                    "github_read_failed", f"could not read review-thread status for PR #{pr}: {_process_detail(proc)}"
+                )
             if proc.returncode == 0:
                 try:
                     payload = json.loads(proc.stdout)
@@ -567,10 +583,14 @@ class FixContextMaterializer:
             "state",
         ]
         raw_pr = self.github.pr_view(pr, fields)
+        if raw_pr is None:
+            raise _github_read_error(self.github, f"could not read PR metadata for PR #{pr}")
         issues = self.github.issue_comments(pr)
+        if issues is None:
+            raise _github_read_error(self.github, f"could not read issue comments for PR #{pr}")
         inline = self.github.review_comments(pr)
-        if raw_pr is None or issues is None or inline is None:
-            raise RecordingError("github_read_failed", f"could not materialize GitHub context for PR #{pr}")
+        if inline is None:
+            raise _github_read_error(self.github, f"could not read review comments for PR #{pr}")
         normalized_pr = {
             "number": raw_pr.get("number", pr),
             "title": raw_pr.get("title") or "",
@@ -694,8 +714,17 @@ class RoadmapContextMaterializer:
                 if not path.is_file() or path.suffix not in (".md", ".lean"):
                     continue
                 size = path.stat().st_size
-                if size > 1_000_000 or total + size > 5_000_000:
-                    raise RecordingError("context_normalization_failed", "roadmap context exceeds the v1 size bound")
+                if size > ROADMAP_FILE_MAX_BYTES:
+                    raise RecordingError(
+                        "context_normalization_failed",
+                        f"roadmap file {path.relative_to(roadmap_dir)} is {size} bytes; "
+                        f"the per-file limit is {ROADMAP_FILE_MAX_BYTES}",
+                    )
+                if total + size > ROADMAP_TOTAL_MAX_BYTES:
+                    raise RecordingError(
+                        "context_normalization_failed",
+                        f"roadmap context is larger than the {ROADMAP_TOTAL_MAX_BYTES}-byte aggregate limit",
+                    )
                 files[str(path.relative_to(roadmap_dir))] = path.read_text(encoding="utf-8", errors="replace")
                 total += size
         rubric = rubric_bundle.read_text(encoding="utf-8") if rubric_bundle and rubric_bundle.is_file() else None
@@ -737,6 +766,7 @@ class TaskRecorder:
                 raise RecordingError("validation_failed", f"invalid record store format at {path}") from exc
         else:
             path.write_text(json.dumps(FORMAT, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (self.config.root / "captures").mkdir(parents=True, exist_ok=True)
 
     def _worker_sha(self) -> str:
         sha = _git_sha(self.worker_root, required=False)

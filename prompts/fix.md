@@ -25,13 +25,23 @@ For each finding, judge whether it is actually correct:
 - **Never write to the roadmaps.** Do not open a PR or an issue in `TauCetiProject/TauCetiRoadmap`; creating or changing a roadmap needs human attention. If a finding means the PR's target is not on any roadmap, say so in your report and stop.
 - Must stay green AND axiom-clean: no `sorry`, no `native_decide`, no new axioms (allowlist: `propext`, `Classical.choice`, `Quot.sound`), no `maxHeartbeats` overrides, and **never silence a linter** (e.g. with `set_option ... false`) to force a change through — that is itself a reason to push back on the finding.
 
-## Verify before pushing (all three MUST pass)
+## Verify before pushing (ALL of these MUST pass — they are exactly what the `build` check runs)
 ```
 lake exe cache get
+git fetch -q origin main
+shim_args=(--fail-on-available); base_shims="$(mktemp)"; base_root="$(mktemp -d)"; have_base=0
+base_ref="$(git merge-base origin/main HEAD)"
+if git show "$base_ref":TauCeti/mathlib-shims.json > "$base_shims" 2>/dev/null; then git archive "$base_ref" TauCeti | tar -x -C "$base_root"; shim_args+=(--base-manifest "$base_shims" --base-root "$base_root"); have_base=1; fi
+if [ "$have_base" = 1 ] && git diff --quiet "$base_ref" -- lake-manifest.json lean-toolchain; then shim_args+=(--only-new); fi
+if [ -f scripts/check-expired-mathlib-shims.py ]; then python3 scripts/check-expired-mathlib-shims.py "${shim_args[@]}"; fi
+rm -f "$base_shims"; rm -rf "$base_root"
 lake build
 lake exe axioms
+lake exe module-system
+bash scripts/lint-env.sh
 ```
-Iterate until green. Never push red.
+Iterate until every command is green. A green `lake build` alone is not sufficient; never push an
+axiom, module-system, shim-expiry, or lint failure.
 
 **Do this synchronously, in this one turn.** Run these commands in the FOREGROUND and wait for each to finish — do NOT background the build and then end your turn expecting to be resumed. You are running non-interactively; nothing will resume you, so a build left running in the background is abandoned and the round ends with nothing committed or pushed. Do not yield, stop, or end your turn until you have committed and pushed (below). Pushing is the only thing that preserves your work.
 
