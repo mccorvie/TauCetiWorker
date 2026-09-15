@@ -1131,13 +1131,15 @@ class TaskRecorder:
 
 
 def resolve_record_dir(cli_value: str | Path | None, env: dict[str, str] | None = None) -> Path | None:
-    """Resolve CLI-over-environment record configuration without touching the filesystem."""
+    """Resolve CLI-over-environment configuration; a blank environment value disables recording."""
     environ = os.environ if env is None else env
     raw = cli_value if cli_value is not None else environ.get("TAUCETI_RECORD_DIR")
     if raw is None:
         return None
     text = str(raw).strip()
     if not text:
+        if cli_value is None:
+            return None
         raise RecordingError("storage_failed", "record directory must not be empty")
     return Path(text).expanduser().resolve()
 

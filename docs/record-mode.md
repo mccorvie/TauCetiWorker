@@ -22,6 +22,10 @@ The equivalent environment variable is `TAUCETI_RECORD_DIR`. An explicit
 `--record-dir` takes precedence. Loop rounds and persistent workers inherit the
 resolved directory.
 
+To disable recording, omit `--record-dir` and leave `TAUCETI_RECORD_DIR` unset
+or empty. A worker's `env` table can set `TAUCETI_RECORD_DIR = ""` to override
+an inherited recording directory. An explicitly empty `--record-dir` is an error.
+
 Recording occurs after candidate selection and claim setup, but before the
 agent starts. It currently applies to:
 

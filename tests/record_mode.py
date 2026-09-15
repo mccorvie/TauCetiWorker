@@ -364,6 +364,23 @@ with tempfile.TemporaryDirectory(prefix="record-mode-") as raw:
         resolve_record_dir(None, {"TAUCETI_RECORD_DIR": str(tmp / "env")}) == (tmp / "env").resolve(),
     )
     check("recording stays disabled when both are absent", resolve_record_dir(None, {}) is None)
+    for blank in ("", " \t "):
+        check(
+            f"blank environment disables recording ({blank!r})",
+            resolve_record_dir(None, {"TAUCETI_RECORD_DIR": blank}) is None,
+        )
+        check(
+            f"CLI enables recording over a blank environment ({blank!r})",
+            resolve_record_dir(tmp / "cli", {"TAUCETI_RECORD_DIR": blank}) == (tmp / "cli").resolve(),
+        )
+        try:
+            resolve_record_dir(blank, {"TAUCETI_RECORD_DIR": str(tmp / "env")})
+            check(f"explicit blank CLI directory is rejected ({blank!r})", False)
+        except RecordingError as exc:
+            check(
+                f"explicit blank CLI directory is rejected ({blank!r})",
+                exc.code == "storage_failed" and "must not be empty" in str(exc),
+            )
 
     # The disabled dispatch seam must not even construct a recorder.
     import tauceti_worker.work_units as work_units
