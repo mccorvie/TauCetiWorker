@@ -35,6 +35,7 @@ RUN_STDLIB=(
   contest_claim.py
   fix_diagnostic.py
   fork_authoring.py
+  github_failure_reason.py
   github_ratelimit.py
   host_agent_preflight.py
   ignore_quota_hardblock.py
@@ -48,7 +49,9 @@ RUN_STDLIB=(
   mirror_creds.py
   mirror_creds_macos.py
   oauth_refresh_loop.py
+  open_pr_pages.py
   pace_curve.py
+  pr_targeting.py
   preflight_review_lake.py
   progress_tool_failure_log.py
   prompt_wrapper_paths.py

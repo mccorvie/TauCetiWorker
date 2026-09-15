@@ -47,7 +47,7 @@ REVIEW_PROVIDER_DOWN_EXIT = 3
 # not recognise and every report wedges. Bump this together with the two pins in
 # TauCetiRoadmap/.github/workflows/progress-*.yml.
 PROGRESS = os.environ.get("TAUCETI_PROGRESS_REPO", "TauCetiProject/TauCetiProgress")
-PROGRESS_REF = os.environ.get("TAUCETI_PROGRESS_REF", "880e8b9737973bfbd8f1f214f4ac2ded67f5b856")
+PROGRESS_REF = os.environ.get("TAUCETI_PROGRESS_REF", "e4cfa57193bd43827411e48f21226cc1c1b3b117")
 PROGRESS_TTL = int(os.environ.get("TAUCETI_PROGRESS_TTL", "600"))  # seconds a `due` verdict stays fresh
 MAX_PROGRESS_ERRORS = 3  # consecutive failed progress rounds before backing off
 PROGRESS_ATTEMPT_GAP = int(os.environ.get("TAUCETI_PROGRESS_GAP", "28800"))  # min seconds between attempts
@@ -156,9 +156,40 @@ GH_INROUND_WAIT = int(os.environ.get("TAUCETI_GH_INROUND_WAIT", "900"))  # cap o
 
 GH_SECONDARY_BASE = 60  # first secondary-limit sleep when no Retry-After is given (then exponential)
 
+# Transient GitHub failures: a 5xx from the API gateway, or a response that died mid-body. Distinct
+# from a rate limit — nothing is throttling us, the request simply did not survive. The survey's
+# opening `gh pr list` asks for statusCheckRollup over every open PR, which takes ~10s server-side and
+# is answered with an HTTP 504 often enough to abort whole rounds. A retry a few seconds later almost
+# always lands, so these get a short in-place retry (see gh_run) rather than costing a round.
+# The open-PR survey that opens every round. It used to be one `gh pr list --limit 200` carrying
+# statusCheckRollup, whose cost grew with the number of open PRs: at ~100 PRs it took ~10s server-side
+# against a GraphQL gateway that gives up around 11, and past 200 PRs it would have started silently
+# dropping the rest. The survey pages instead, so the cost of any ONE request is fixed by the page size
+# no matter how large the project grows, and no page is anywhere near the gateway's patience.
+OPEN_PR_PAGE = int(os.environ.get("TAUCETI_OPEN_PR_PAGE", "100"))  # PRs per request (GitHub's maximum)
+
+OPEN_PR_MAX_PAGES = int(os.environ.get("TAUCETI_OPEN_PR_MAX_PAGES", "100"))  # refuse to loop forever
+
+GH_TRANSIENT_TRIES = 3  # retries after a transient failure, then surface it
+
+GH_TRANSIENT_BASE = 5  # first transient-failure sleep, doubling per retry (5s, 10s, 20s)
+
 _GH_PRIMARY_RE = re.compile(r"(?:API )?rate limit exceeded|rate limit.*exceeded", re.I)
 
 _GH_SECONDARY_RE = re.compile(r"secondary rate limit|abuse detection", re.I)
+
+# Each of these is the transport or the server failing, never a verdict about our request: a 5xx, a
+# body that stopped arriving (gh reports the truncation as a JSON parse error), or a dropped
+# connection. Deliberately narrow — a 4xx is an answer, and retrying one just repeats it.
+# A GraphQL document that opens with `mutation` writes; anything else (a `query`, or the bare `{...}`
+# shorthand) reads. Leading comments are skipped so a commented document is still classified by its
+# operation.
+_GQL_MUTATION_RE = re.compile(r"\A\s*(?:#[^\n]*\n\s*)*mutation\b")
+
+_GH_TRANSIENT_RE = re.compile(
+    r"HTTP 5\d\d|unexpected end of JSON input|connection reset by peer|i/o timeout|TLS handshake timeout",
+    re.I,
+)
 
 
 # Claims / scoreboard cache.
@@ -235,6 +266,12 @@ WORK_TASKS = list(ALLOWED_TASKS)
 # is the final fallback and is handled separately after these stages. The durable attempt breaker
 # keeps a stuck or rejected progress report from burning every round.
 AUTO_STAGES = ("rebase", "bump", "progress", "fix-ci", "fix", "review")
+
+# The work units that act on an EXISTING pull request, and so are the ones `--pr` can target. The two
+# left out cannot be named by a PR number at all: `progress` writes a roadmap's generated reports
+# rather than touching a PR of ours, and `roadmap` opens a PR that does not exist yet. Both carry a
+# pr=0 candidate, which is why no `--pr` value is allowed to be 0.
+PR_TASKS = ("rebase", "bump", "fix-ci", "fix", "review")
 
 # The "#" shown in the survey table IS the key you press in the TUI to run one round of that kind.
 # ALLOWED_TASKS deliberately stays the stable display/key order; AUTO_STAGES is the unrestricted
