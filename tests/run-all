@@ -33,6 +33,7 @@ RUN_STDLIB=(
   codex_account.py
   codex_fallback.py
   contest_claim.py
+  dispatch_revalidation.py
   fix_diagnostic.py
   fork_authoring.py
   github_failure_reason.py
@@ -59,6 +60,7 @@ RUN_STDLIB=(
   quota_auto_refresh.py
   quota_cache_fp.py
   quota_loop_refresh.py
+  rebase_handoff.py
   review_sync_failure.py
   quota_claude_bootstrap.py
   quota_claude_windows.py
@@ -71,6 +73,7 @@ RUN_STDLIB=(
   review_diagnostics.py
   review_provider_down.py
   review_scheduling.py
+  review_state_freshness.py
   review_throttles.py
   roadmap_backpressure.py
   roadmap_claims.py

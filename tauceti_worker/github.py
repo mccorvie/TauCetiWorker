@@ -27,6 +27,7 @@ from .constants import (
     OPEN_PR_PAGE,
     TAUCETI,
 )
+from .review_diagnostics import public_diagnostic_quality
 
 
 @functools.lru_cache(maxsize=1)
@@ -386,7 +387,7 @@ _OPEN_PRS_QUERY = """query($owner:String!,$repo:String!,$n:Int!,$cursor:String){
     pullRequests(states:OPEN,first:$n,after:$cursor,orderBy:{field:CREATED_AT,direction:ASC}){
       pageInfo{hasNextPage endCursor}
       nodes{
-        number title body isDraft mergeable headRefOid headRefName
+        number title body isDraft mergeable updatedAt headRefOid headRefName
         headRepositoryOwner{login} headRepository{name}
         author{login __typename}
         labels(first:50){totalCount nodes{name}}
@@ -411,7 +412,10 @@ def _pr_json_from_graphql(node: dict) -> dict:
     is_bot = author.get("__typename") == "Bot"
     login = author.get("login", "")
     return {
-        **{k: node.get(k) for k in ("number", "title", "body", "isDraft", "mergeable", "headRefOid", "headRefName")},
+        **{
+            k: node.get(k)
+            for k in ("number", "title", "body", "isDraft", "mergeable", "updatedAt", "headRefOid", "headRefName")
+        },
         "headRepositoryOwner": node.get("headRepositoryOwner") or {},
         "headRepository": node.get("headRepository") or {},
         "author": {"login": f"app/{login}" if is_bot and login else login, "is_bot": is_bot},
@@ -570,12 +574,12 @@ class GitHub:
             if matches:
                 issue = matches[0]
                 existing_body = issue.get("body") if isinstance(issue.get("body"), str) else ""
-                # The issue is fleet-wide but retained diagnostics are per-worker. Once any worker
-                # has supplied an allow-listed diagnostic, do not let peers continually overwrite
-                # it with their own attempt or a generic bubble failure. We still upgrade an older
-                # issue that has no public diagnostic at all.
+                # Keep equally useful peer reports stable, but let an actual diagnosis
+                # replace "review command failed". The comparison uses fixed public
+                # categories only; raw subprocess output never crosses this boundary.
                 has_public_diagnostic = "Latest allow-listed worker diagnostics:" in existing_body
-                if existing_body != body and not has_public_diagnostic:
+                better = public_diagnostic_quality(body) > public_diagnostic_quality(existing_body)
+                if existing_body != body and (not has_public_diagnostic or better):
                     self._gh(
                         [
                             "issue",
@@ -591,6 +595,34 @@ class GitHub:
             self._gh(["issue", "create", "--repo", self.repo, "--title", title, "--body", body])
         except Exception:
             pass
+
+    def rebase_requested(self, pr: int, head: str) -> bool:
+        """A trusted sweep handoff for this exact head; stale requests spend no attempts."""
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            return False
+        p = self._gh(
+            [
+                "api",
+                "--paginate",
+                f"/repos/{self.repo}/issues/{pr}/comments?per_page=100",
+                "--jq",
+                ".[] | {body, author: .user.login}",
+            ]
+        )
+        if p.returncode != 0:
+            return False
+        try:
+            comments = [json.loads(line) for line in (p.stdout or "").splitlines() if line.strip()]
+        except (ValueError, TypeError):
+            return False
+        return any(
+            isinstance(c, dict)
+            and c.get("author") == "tauceti-review-bot[bot]"
+            and isinstance(c.get("body"), str)
+            and c["body"].startswith("Merge-queue recovery for head `")
+            and f"<!--tauceti-rebase:v1 {head}-->" in (c.get("body") or "").splitlines()
+            for c in comments
+        )
 
     def issue_comments(self, pr: int) -> list[dict] | None:
         """All issue comments for a PR (paginated). None on fetch failure (distinct from empty)."""

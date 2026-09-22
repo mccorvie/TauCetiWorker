@@ -47,7 +47,7 @@ REVIEW_PROVIDER_DOWN_EXIT = 3
 # not recognise and every report wedges. Bump this together with the two pins in
 # TauCetiRoadmap/.github/workflows/progress-*.yml.
 PROGRESS = os.environ.get("TAUCETI_PROGRESS_REPO", "TauCetiProject/TauCetiProgress")
-PROGRESS_REF = os.environ.get("TAUCETI_PROGRESS_REF", "e4cfa57193bd43827411e48f21226cc1c1b3b117")
+PROGRESS_REF = os.environ.get("TAUCETI_PROGRESS_REF", "dbb229dec0434fd7faaa18a79c776b18f18a8252")
 PROGRESS_TTL = int(os.environ.get("TAUCETI_PROGRESS_TTL", "600"))  # seconds a `due` verdict stays fresh
 MAX_PROGRESS_ERRORS = 3  # consecutive failed progress rounds before backing off
 PROGRESS_ATTEMPT_GAP = int(os.environ.get("TAUCETI_PROGRESS_GAP", "28800"))  # min seconds between attempts
@@ -198,6 +198,16 @@ CLAIM_TTL_S = int(os.environ.get("CLAIM_TTL", "1500"))  # 25 min lease; expires 
 CLAIM_HEARTBEAT_S = int(os.environ.get("CLAIM_HEARTBEAT", "300"))  # renew every 5 min while the agent runs
 
 SBCACHE_TTL = int(os.environ.get("TAUCETI_META_TTL", "120"))  # seconds a cached scoreboard meta stays fresh
+
+# How long a cached comment read may be served on the strength of the PR's `updatedAt` alone (see
+# ReviewState.observe). Nothing about a PR's comments can change without GitHub bumping that clock —
+# measured over 179 in-place scoreboard edits, none landed newer than their PR's `updatedAt` — with the
+# one exception it cannot express: a DELETED comment leaves no timestamp behind. This backstop is the
+# bound on that blind spot, so a deleted or forged scoreboard is refetched within half an hour even
+# though nothing announced it. Deliberately not "until the next reset": a heuristic we cannot verify
+# gets a ceiling. A read served under this rule is `assumed`, never `fresh`, and cannot authorize a
+# mutation; see dispatch()'s revalidation of the one PR a round acts on.
+SBCACHE_BACKSTOP_S = int(os.environ.get("TAUCETI_META_BACKSTOP", "1800"))
 
 COMMENTS_MEMO_S = 5  # in-memory window over which one survey pass coalesces its issue-comment fetches
 
