@@ -379,8 +379,12 @@ and that bootstrap in detail.
 
 - [Record mode](docs/record-mode.md): capture production, the on-disk format,
   and the TauCetiBench import and reproducibility contract.
+- [TauCetiBench test harness design notes](docs/test-harness-design.md): current
+  corpus inventory and considerations for task selection, execution, and scoring.
 - [Persistent workers](docs/workers.md): the `workers.toml` schema, every
   `tauceti workers` action, state on disk, and running past logout.
+- [Recording workers](docs/record-workers.md): the Codex capture and Claude
+  maintenance fleet that replaces the record-mode canary.
 - [`tauceti work` reference](docs/reference.md): every flag and environment
   variable.
 - [Quota and pacing](docs/quota.md): credential sources, Claude's two windows,

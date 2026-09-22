@@ -36,6 +36,10 @@ Other phases run normally without producing captures. Recording is fail-open:
 a recording failure is logged and the live work continues. Consequently, a
 missing capture does not mean the worker did not run.
 
+For this workstation's paced Codex/Claude collection fleet, see
+[Recording workers](record-workers.md) and
+[`record-workers.toml`](../record-workers.toml).
+
 ## What reproducibility means
 
 A complete capture preserves:

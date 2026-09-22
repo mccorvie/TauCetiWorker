@@ -1,0 +1,41 @@
+# Local production fleet for collecting TauCetiBench record-mode inputs.
+# Apply: ./tauceti workers --config ./record-workers.toml apply
+# Roles, pacing, and switching fleets: docs/record-workers.md
+version = 1
+
+[[workers]]
+id = "record"
+enabled = true
+agent = "codex"
+# These are the only phases that currently produce benchmark captures.
+# The existing task cascade prioritizes review fixes over new roadmap work.
+only = ["fix", "roadmap"]
+record_dir = "/home/tauceti/TauCetiWorker/state/records"
+# Account-wide usage must be below the curve in both session and weekly windows.
+pace = "0:10,100:65"
+stream = true
+
+[workers.env]
+PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/tauceti/.elan/bin:/home/tauceti/.local/bin:/snap/bin"
+# The explicit record_dir above selects the store, even with inherited settings.
+TAUCETI_RECORD_DIR = ""
+
+[[workers]]
+id = "worker"
+enabled = true
+agent = "claude"
+# Keep PRs buildable and reviewed while Codex collects fix/roadmap inputs.
+only = ["rebase", "bump", "progress", "fix-ci", "review"]
+pace = "0:10,100:65"
+# Use the dedicated unattended-worker login; stop any other fleet before switching.
+auto_refresh = true
+stream = true
+
+[workers.env]
+PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/tauceti/.elan/bin:/home/tauceti/.local/bin:/snap/bin"
+TAUCETI_RECORD_DIR = ""
+CLAUDE_CONFIG_DIR = "/home/tauceti/.config/tauceti/claude-ping"
+DISABLE_AUTOUPDATER = "1"
+# Per PR, per worker, per UTC day; leave fresh heads to other reviewers for 20 min.
+TAUCETI_REVIEW_DAILY_CAP = "4"
+TAUCETI_REVIEW_MIN_AGE = "20"
