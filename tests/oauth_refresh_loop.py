@@ -251,6 +251,15 @@ with tempfile.TemporaryDirectory() as temporary:
         check(f"{type(failure).__name__} becomes a catchable OSError", caught.startswith("token endpoint unreachable:"))
         check(f"{type(failure).__name__} does not quote the request", "secret-token" not in caught)
 
+    # Claude's token endpoint sits behind Cloudflare, which rejects urllib's default signature.
+    with patch.object(oauth.urllib.request, "urlopen") as open_url:
+        response = open_url.return_value.__enter__.return_value
+        response.status = 200
+        response.read.return_value = b"{}"
+        oauth._post_json("https://example.test/claude", {"refresh_token": "secret-token"})
+    sent_request = open_url.call_args.args[0]
+    check("token refresh identifies TauCetiWorker", sent_request.get_header("User-agent") == "TauCetiWorker/1.0")
+
     # Valid JSON of the wrong SHAPE. Nothing here writes these files, so a hand edit or a schema change
     # must read as "nothing usable" — `.get()` on a list raises AttributeError, which the daemon does not
     # catch, so this used to kill the process whose whole job is to keep retrying.

@@ -272,7 +272,12 @@ def _post_json(url: str, payload: dict[str, Any], timeout: int = 15) -> tuple[in
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        # Cloudflare rejects urllib's default Python-urllib signature at Claude's token endpoint.
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "TauCetiWorker/1.0",
+        },
         method="POST",
     )
     # http.client raises its own exception tree for a truncated or malformed response (IncompleteRead,
