@@ -26,3 +26,11 @@ id = "worker4"
 enabled = true
 agent = "codex"
 tools = ["loogle"]
+
+# Semantic search arms: each name needs its service socket on the host (docs/tools.md).
+[[workers]]
+id = "worker5"
+enabled = false
+agent = "codex"
+only = ["roadmap", "fix", "fix-ci"]
+tools = ["finder", "explore"]

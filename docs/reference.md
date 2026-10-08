@@ -22,7 +22,7 @@ list is in `tauceti work -h`. For persistent workers, see
 | `--roadmap-only AREA` | The single roadmap area for roadmap rounds (empty = all areas). |
 | `--roadmap-skip AREA[,AREA...]` | Roadmap areas to exclude from selection (`--roadmap-only` wins on overlap). |
 | `--source PATH_OR_URL` | Supplementary local Git repository directory or Git repository URL (checked-out/default `HEAD`) for authoring a PR. A shallow snapshot is stored in worker state, refreshed on later rounds, and mounted read-only in Bubble mode. Requires the roadmap phase to be enabled and one specific `--roadmap-only AREA`; other enabled phases ignore it, and the roadmap and review quality remain authoritative. |
-| `--tool NAME` | Enable a supported trusted agent tool; repeat for more than one. No tools are enabled by default, and unknown names are rejected before dispatch. The initial supported name is `loogle`. |
+| `--tool NAME` | Enable a supported trusted agent tool; repeat for more than one. No tools are enabled by default, and unknown names are rejected before dispatch. Supported names: `loogle`, `finder`, `explore` (see [tools](tools.md)). |
 | `--roadmap-extra-identities LOGIN[,LOGIN...]` | Extra GitHub logins, beyond your `gh auth` identity, whose claimed intentions the worker treats as its own (won't avoid). |
 | `--ignore-claims` | Don't avoid targets others have claimed on the intentions board (claim-respect is on by default). |
 | `--auto-refresh` | Renew this worker's Claude access token when it expires, instead of reporting Claude unavailable until a human runs `claude` again. Off by default, and only safe when nothing else uses the same credential file — the refresh token is single-use, so the rotation logs out an interactive `claude`, a second refresher, or a copy of the credential elsewhere. See [quota and pacing](quota.md). |
@@ -173,6 +173,12 @@ Flags win over these. Most are tuning knobs with sane defaults.
 | `TAUCETI_WORKER_ID` | _(unset)_ | Pin the id; when unset, `work` takes the lowest free `workerN`. |
 | `TAUCETI_LOOGLE_SOCKET_DIR` | _(unset)_ | Host directory containing `loogle.sock`; mounted read-only at `/run/tauceti-loogle` for Bubble rounds that enable `--tool loogle`. |
 | `TAUCETI_LOOGLE_URL` | `http://127.0.0.1:8088/json` | URL used by `scripts/tools/loogle.sh` when its Unix socket is unavailable. |
+| `TAUCETI_FINDER_SOCKET_DIR` | _(unset)_ | Host directory containing `finder.sock`; mounted read-only at `/run/tauceti-finder` for Bubble rounds that enable `--tool finder`. |
+| `TAUCETI_FINDER_URL` | `http://127.0.0.1:8089/search` | URL used by `scripts/tools/finder.sh` when its Unix socket is unavailable. |
+| `TAUCETI_EXPLORE_SOCKET_DIR` | _(unset)_ | Host directory containing `explore.sock`; mounted read-only at `/run/tauceti-explore` for Bubble rounds that enable `--tool explore`. |
+| `TAUCETI_EXPLORE_URL` | `http://127.0.0.1:8090/search` | URL used by `scripts/tools/explore.sh` when its Unix socket is unavailable. |
+| `TAUCETI_SEARCH_K` | `10` | Hits per query for `finder.sh` and `explore.sh` (`-k N` on a call overrides it). |
+| `TAUCETI_TOOL_LOG` | _(unset)_ | File every tool wrapper appends one JSON line per call to (tool, time, latency, exit code, query, hit names). Unset = no logging. Host rounds inherit it; Bubble rounds do not receive it. See [tools](tools.md). |
 | `TAUCETI_FORK` | auto-created | Point at an existing fork instead of the one the worker creates. |
 | `TAUCETI_ROADMAP_ONLY` | _(unset)_ | The single roadmap area for `--roadmap-only`. Unset = a fresh random area each round (falls back to all areas if the list can't be fetched); `""` = all areas. |
 | `TAUCETI_ROADMAP_SKIP` | _(unset)_ | Comma-separated roadmap areas to exclude, for `--roadmap-skip`. |

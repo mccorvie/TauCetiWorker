@@ -376,6 +376,8 @@ and that bootstrap in detail.
   variable.
 - [Quota and pacing](docs/quota.md): credential sources, Claude's two windows,
   and the window bootstrap.
+- [Worker tools](docs/tools.md): the `--tool` layer, the search services it
+  talks to, and the per-call log it writes.
 - [Inside the sandbox](docs/sandbox.md): what `--bubble` enforces, Lake caches,
   and macOS credential handling.
 - [Docker deployment](docs/docker.md): the unattended Compose deployment.
