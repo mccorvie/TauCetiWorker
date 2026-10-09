@@ -16,16 +16,20 @@ duplicates, which would confound any comparison of authoring reuse.
 
 `tauceti_worker/tools.py` holds one `ToolDefinition` per tool: the scripts it stages (the wrapper
 plus any helper it sources), the environment variables it may read, the host directories it needs
-mounted into a sandbox and where, the host commands `tauceti doctor` checks for, and its prompt
-fragment. Harnesses other than the worker (the benchmark runner) drive their setup from these
-fields rather than special-casing names: `enabled_tools`, `stage_tool_scripts`, `resolve_mounts`,
-`forwarded_environment`, `add_tool_prompt`.
+mounted into a sandbox and where, the host commands `tauceti doctor` checks for, its prompt
+fragment, and, for an MCP tool, the server to inject (`mcp`) and the host directories a sandbox must
+bind at the same path (`host_binds`). Harnesses other than the worker (the benchmark runner) drive
+their setup from these fields rather than special-casing names: `enabled_tools`,
+`stage_tool_scripts`, `resolve_mounts`, `resolve_host_binds`, `forwarded_environment`,
+`add_tool_prompt`, `agent_tool_argv`, `preflight_tools`.
 
 | Name | What the agent gets | Service it talks to |
 | --- | --- | --- |
 | `loogle` | `tools/loogle.sh '<query>'`: type-directed search over Mathlib and canonical Tau Ceti main | A Loogle process on `/run/tauceti-loogle/loogle.sock` (or `TAUCETI_LOOGLE_URL`) |
 | `finder` | `tools/finder.sh [--json] [-k N] '<query>'`: Lean Finder semantic search; English, a goal, or a partial signature | `/run/tauceti-finder/finder.sock` (or `TAUCETI_FINDER_URL`) |
 | `explore` | `tools/explore.sh [--json] [-k N] '<query>'`: LeanExplore semantic search; English or a guessed name fragment | `/run/tauceti-explore/explore.sock` (or `TAUCETI_EXPLORE_URL`) |
+| `beam` | The `lean_beam` MCP server: `lean_sync`, `lean_run_at`, `lean_goals`, `lean_save`, … | `$TAUCETI_BEAM_MCP`, a [Lean Beam](https://github.com/leanprover/lean-beam) install under `$TAUCETI_TOOLS_ROOT` |
+| `leanlsp` | The `lean_lsp` MCP server: `lean_goal`, `lean_diagnostic_messages`, `lean_multi_attempt`, … | `$TAUCETI_LEAN_LSP_MCP`, a [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp) install under `$TAUCETI_TOOLS_ROOT` |
 
 Every service indexes Mathlib plus canonical Tau Ceti main at one fixed commit. None sees
 branch-local changes, which the prompt fragments say, along with: hits are candidates to confirm
@@ -102,9 +106,75 @@ IsCompact.image  [theorem, Mathlib.Topology.Compactness.Compact]
 `--json` passes the service's response through unchanged. `-k N` (or `TAUCETI_SEARCH_K`, default
 10) sets the number of hits; `(no hits)` is printed for an empty result.
 
+## Lean LSP tools (`beam`, `leanlsp`)
+
+The two LSP tools are MCP servers rather than CLIs: the agent calls them as tools, and they keep a
+Lean server with Mathlib loaded for the whole round, which is what makes a goal query or a tactic
+probe cheap. Lean Beam (`leanprover/lean-beam`) is the primary candidate: speculative `lean_run_at`
+probes against a saved file, `lean_sync` as a readiness barrier instead of `lake build`, and
+`lean_save` module checkpoints. lean-lsp-mcp (`oOo0oOo/lean-lsp-mcp`) is the comparison arm and
+the fallback: `lean_goal`, `lean_diagnostic_messages`, `lean_multi_attempt`. Each arm enables one
+of them.
+
+**Injection, not configuration.** The worker never writes an agent config file. `agent_tool_argv`
+turns each enabled server into per-invocation flags, which `host_agent_argv` appends:
+
+- Codex: dotted overrides, `-c 'mcp_servers.lean_beam.command="…"'`,
+  `.env={LEAN_PROJECT_PATH="<checkout>",…}`, `.env_vars=["ELAN_HOME","LAKE_CACHE_DIR",…]` (Codex
+  starts stdio servers with a minimal environment, so the toolchain store and Lake cache settings
+  the Lean server needs are whitelisted explicitly), `.startup_timeout_sec=60`,
+  `.tool_timeout_sec=600`, `.required=true` (a server that cannot start fails the run instead of
+  silently running without it), and for Beam `.supports_parallel_tool_calls=true`. `codex exec
+  --help` documents the dotted path and TOML value; `codex mcp list` with the same flags shows the
+  resulting server.
+- Claude Code: one `mcp-servers.json` under the round directory (`{"mcpServers": {...}}`, stdio
+  entries with `command`, `args`, `env`) passed as `--mcp-config <file> --strict-mcp-config`, so
+  the operator's own MCP servers never reach a round.
+- Kiro and the OpenRouter `pi` runner have no per-invocation switch; they get a logged warning and
+  no server.
+
+The executable comes from `TAUCETI_BEAM_MCP` / `TAUCETI_LEAN_LSP_MCP`, defaulting under
+`TAUCETI_TOOLS_ROOT` (`~/.local/opt/tauceti-tools`, the layout workboots' `local-lsp/install-*.sh`
+produce). `{{checkout}}` in a server's environment and in its prompt fragment is rendered to the
+absolute path of the Lean project the agent works in (the host checkout; the bench's task repo).
+
+**Fail loud.** A CLI tool fails open; an MCP tool must not, or a treatment arm whose server never
+started would silently become a control arm while the prompt still advertises the tool. So
+`preflight_tools` runs before dispatch (in `tauceti work` and when a `workers.toml` definition is
+validated) and stops the round when the executable is missing or not executable. The same
+preflight rejects an MCP tool combined with `--bubble`: Bubble's inner agent command is a frozen
+contract that does not yet carry these flags, so MCP tools are **host and benchmark only** for now.
+
+**Sandboxes.** Everything a server needs must be visible with no network and no home directory:
+`resolve_host_binds` lists the host directories (the tools root and `ELAN_HOME`) a bwrap sandbox
+binds read-only at the same path; the checkout with its `.lake` is already there, and the
+Lake/Mathlib cache variables reach the server through `env_vars`.
+Beam's wrapper resolves its runtime relative to its own path; lean-lsp-mcp is installed on the
+system python so its venv needs only `/usr` and the tools root. lean-lsp-mcp's remote search tools
+(`lean_leansearch`, `lean_loogle`, `lean_leanfinder`, `lean_hammer_premise`) are disabled through
+`LEAN_MCP_DISABLED_TOOLS`, so an arm never reaches unpinned, current Mathlib and never spends a
+turn on a tool that cannot work offline.
+
+**Counting tool calls.** MCP calls do not pass through a wrapper, so they are not in
+`TAUCETI_TOOL_LOG`. `tauceti_worker.tool_calls.extract_tool_calls(transcript)` reads the raw
+provider transcript (Codex `exec --json` JSONL, Claude `stream-json`) and emits one record per
+call, `{provider, kind: mcp|cli, server, tool, ok, latency_ms, error_kind, t}`, counting both MCP
+calls and shell invocations of `tools/<name>.sh` (the cross-check for the wrapper log);
+`summarize` folds them into per-tool counts. `python -m tauceti_worker.tool_calls <file>` prints
+them. Neither transcript format carries per-call timestamps or durations in the observed versions,
+so those fields are null until a provider adds them.
+
+| Provider | Search CLIs | MCP tools |
+| --- | --- | --- |
+| Codex (host, bench) | yes | yes, `-c mcp_servers.*` |
+| Claude (host, bench) | yes | yes, `--mcp-config` + `--strict-mcp-config` |
+| Kiro, deepseek, minimax | yes | no (warning logged) |
+| Any agent under `--bubble` | yes | no (rejected before dispatch) |
+
 ## `tauceti doctor`
 
 Doctor lists each registered tool under "optional worker tools" as `ok` when its scripts are
-packaged and its host commands (`curl`, `jq`) exist. It does not probe the services: a missing
-optional service never fails doctor, and a round with the tool enabled still runs, with the
-wrapper failing open.
+packaged and its host commands (`curl`, `jq`) exist, or, for an MCP tool, when its server
+executable resolves (the path is shown). It does not probe the search services: a missing
+optional service never fails doctor, and a round with a CLI tool enabled still runs, with the
+wrapper failing open. A round with an MCP tool enabled and no executable does not start.
