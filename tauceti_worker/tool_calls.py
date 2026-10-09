@@ -4,14 +4,25 @@ CLI tools write `TAUCETI_TOOL_LOG` themselves. MCP servers do not: Codex and Cla
 so the only record is the provider transcript the worker already keeps (`codex exec --json` JSONL
 or Claude `--output-format stream-json`). This module reads either and emits one record per call:
 
-    {"provider", "kind": "mcp" | "cli", "server", "tool", "ok", "latency_ms", "error_kind", "t"}
+    {"provider", "kind": "mcp" | "cli" | "tool_search", "server", "tool", "ok", "latency_ms",
+     "error_kind", "t"}
 
 `kind: "mcp"` is an MCP tool call (`server`/`tool` as the agent saw them); `kind: "cli"` is a shell
-invocation of a staged `tools/<name>.sh` wrapper, the cross-check for the wrapper's own log. Neither
-transcript format carries per-event timestamps or durations in the versions observed (Codex 0.146
-fixture, Claude 2.1), so `t` and `latency_ms` are None unless the event carries them.
-# S4a: confirm against a captured transcript: Codex `mcp_tool_call` item fields (`server`, `tool`,
-# `status`, `error.message`, any `duration_ms`) and Claude's `mcp__<server>__<tool>` naming.
+invocation of a staged `tools/<name>.sh` wrapper, the cross-check for the wrapper's own log;
+`kind: "tool_search"` is Claude's deferred-tool lookup (`ToolSearch`), which loads MCP tool schemas
+and is reported apart from the calls themselves.
+
+Shapes, from captured transcripts (tests/fixtures/codex_exec_mcp_0_160.jsonl, claude_stream_mcp_2_1.jsonl):
+
+- Codex `exec --json`: `item.started` then `item.completed`, both with `item.type == "mcp_tool_call"`,
+  `item.server`, bare `item.tool`, `item.arguments`, `item.status` (`in_progress` -> `completed`),
+  `item.error` (null on success), and on completion `item.result.content[]`. One call is counted per
+  `item.completed`. Codex events carry no timestamps, so `t` and `latency_ms` are None.
+- Claude `stream-json`: `assistant` events with `message.content[]` `tool_use` blocks named
+  `mcp__<server>__<tool>`; the matching `user` event's `tool_result` block (by `tool_use_id`) gives
+  `ok` via `is_error`. Events carry an ISO `timestamp`: `t` is the call's, `latency_ms` is the gap
+  to its result event (approximate). The `system`/`init` event lists `mcp_servers`
+  (`transcript_mcp_servers`).
 """
 
 from __future__ import annotations
@@ -19,6 +30,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +86,13 @@ def _record(
     }
 
 
+def _seconds(stamp: Any) -> float | None:
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def _codex(event: dict[str, Any], out: list[dict[str, Any]]) -> None:
     if event.get("type") != "item.completed" or not isinstance(event.get("item"), dict):
         return
@@ -111,6 +130,7 @@ def _claude(event: dict[str, Any], out: list[dict[str, Any]], pending: dict[str,
         return
     content = message.get("content")
     blocks = content if isinstance(content, list) else []
+    stamp = event.get("timestamp")
     if kind == "assistant":
         for block in blocks:
             if not isinstance(block, dict) or block.get("type") != "tool_use":
@@ -118,8 +138,11 @@ def _claude(event: dict[str, Any], out: list[dict[str, Any]], pending: dict[str,
             name = str(block.get("name", ""))
             tool_id = str(block.get("id", ""))
             mcp = CLAUDE_MCP_RE.match(name)
-            if mcp:
-                rec = _record("claude", "mcp", server=mcp["server"], tool=mcp["tool"], ok=None)
+            if mcp or name == "ToolSearch":
+                if mcp:
+                    rec = _record("claude", "mcp", server=mcp["server"], tool=mcp["tool"], ok=None, t=stamp)
+                else:
+                    rec = _record("claude", "tool_search", server=None, tool=name, ok=None, t=stamp)
                 out.append(rec)
                 if tool_id:
                     pending[tool_id] = rec
@@ -128,7 +151,7 @@ def _claude(event: dict[str, Any], out: list[dict[str, Any]], pending: dict[str,
             command = str(inputs.get("command", "")) if name == "Bash" else ""
             names = CLI_TOOL_RE.findall(command)
             for cli_name in names:
-                rec = _record("claude", "cli", server=None, tool=cli_name, ok=None)
+                rec = _record("claude", "cli", server=None, tool=cli_name, ok=None, t=stamp)
                 out.append(rec)
                 if tool_id and len(names) == 1:
                     pending[tool_id] = rec
@@ -141,6 +164,9 @@ def _claude(event: dict[str, Any], out: list[dict[str, Any]], pending: dict[str,
                 continue
             failed = bool(block.get("is_error"))
             rec["ok"] = not failed
+            start, end = _seconds(rec["t"]), _seconds(stamp)
+            if start is not None and end is not None and end >= start:
+                rec["latency_ms"] = round((end - start) * 1000)
             rec["error_kind"] = error_kind(_text(block.get("content"))) if failed else None
 
 
@@ -169,19 +195,40 @@ def extract_tool_calls(path: str | Path) -> list[dict[str, Any]]:
 
 
 def summarize(calls: list[dict[str, Any]]) -> dict[str, Any]:
-    """`{"mcp": {"<server>/<tool>": n}, "cli": {"<tool>": n}, "failed": n}` for run records."""
+    """`{"mcp": {"<server>/<tool>": n}, "cli": {"<tool>": n}, "tool_search": n, "failed": n}`."""
     mcp: dict[str, int] = {}
     cli: dict[str, int] = {}
+    tool_search = 0
     failed = 0
     for call in calls:
-        if call["kind"] == "mcp":
+        if call["kind"] == "tool_search":
+            tool_search += 1
+        elif call["kind"] == "mcp":
             key = f"{call['server']}/{call['tool']}"
             mcp[key] = mcp.get(key, 0) + 1
         else:
             cli[call["tool"]] = cli.get(call["tool"], 0) + 1
         if call["ok"] is False:
             failed += 1
-    return {"mcp": mcp, "cli": cli, "failed": failed}
+    return {"mcp": mcp, "cli": cli, "tool_search": tool_search, "failed": failed}
+
+
+def transcript_mcp_servers(path: str | Path) -> dict[str, str]:
+    """`{server: status}` from a Claude transcript's `system`/`init` event (`mcp_servers`), e.g.
+    `{"lean_beam": "connected"}`; empty for a Codex transcript, which lists no servers."""
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
+            servers = event.get("mcp_servers")
+            return {
+                str(s["name"]): str(s.get("status", "?")) for s in servers or [] if isinstance(s, dict) and "name" in s
+            }
+    return {}
 
 
 def _cli_main(argv: list[str] | None = None) -> int:

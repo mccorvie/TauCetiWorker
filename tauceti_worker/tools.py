@@ -181,8 +181,17 @@ _TOOLS_ROOT_BIND = HostBind(TOOLS_ROOT_ENV, TOOLS_ROOT_DEFAULT)
 # complete on its own).
 _ELAN_BIND = HostBind("ELAN_HOME", "~/.elan")
 # What a Lean server spawned by the MCP server needs from the round's environment: the toolchain
-# store and the Lake/Mathlib cache settings the agent's own `lake build` uses.
-_LEAN_ENV_VARS = ("ELAN_HOME", "LAKE_CACHE_DIR", "MATHLIB_CACHE_DIR", "LAKE_ARTIFACT_CACHE", "LAKE_RESTORE_ARTIFACTS")
+# store, a UTF-8 locale and the round's TMPDIR, and the Lake/Mathlib cache settings the agent's own
+# `lake build` uses.
+_LEAN_ENV_VARS = (
+    "ELAN_HOME",
+    "LANG",
+    "TMPDIR",
+    "LAKE_CACHE_DIR",
+    "MATHLIB_CACHE_DIR",
+    "LAKE_ARTIFACT_CACHE",
+    "LAKE_RESTORE_ARTIFACTS",
+)
 
 _FINISH_WITH_BUILD = """\
 Before you finish, run `lake build` once from the shell: CI builds from clean
@@ -214,8 +223,12 @@ Positions are 0-based (`line`, `character`, as in LSP): editor line N is `line: 
    diagnostics) instead of `lake build`. A probe with an old `version` fails with
    `contentModified` or `documentVersionMismatch`: sync again and retry.
 4. When a file is error-free (`readiness.save_ready: true`), call `lean_save` on
-   it so files importing it see the change without `lake build`, then `lean_sync`
-   the importing file before probing it.
+   it so files importing it see the change without `lake build`. An importing
+   file that is already open does not pick that up: its `lean_sync` fails with
+   `syncBarrierIncomplete`, so call `lean_refresh` on it, then probe it. Read
+   errors from `lean_sync`/`lean_refresh` with `diagnostics_in_result: true`
+   (there is no separate diagnostics tool).
+5. `lean_run_at` results are speculative: a successful probe is not a saved edit.
 {_FINISH_WITH_BUILD}""",
     mcp=McpServer(
         name="lean_beam",
@@ -257,8 +270,11 @@ are 1-based (`line`, `column`), as in an editor.
 - `lean_multi_attempt` tries several tactic snippets at a line in scratch copies
   (three or more at a time is cheapest) and reports each one's goal and
   diagnostics; your file is not changed.
+- `lean_run_code` compiles a self-contained snippet with its own imports.
+  `lean_build` runs `lake build`; prefer the shell `lake build` at the end.
 - There is no checkpoint: a file importing a changed module sees the change only
-  after `lake build`. The remote search tools are disabled in this run.
+  after `lake build`. The remote search tools are disabled in this run; the
+  sandbox has no network, so do not retry any tool that would need it.
 {_FINISH_WITH_BUILD}""",
     mcp=McpServer(
         name="lean_lsp",

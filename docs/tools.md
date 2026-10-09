@@ -120,9 +120,10 @@ of them.
 turns each enabled server into per-invocation flags, which `host_agent_argv` appends:
 
 - Codex: dotted overrides, `-c 'mcp_servers.lean_beam.command="…"'`,
-  `.env={LEAN_PROJECT_PATH="<checkout>",…}`, `.env_vars=["ELAN_HOME","LAKE_CACHE_DIR",…]` (Codex
-  starts stdio servers with a minimal environment, so the toolchain store and Lake cache settings
-  the Lean server needs are whitelisted explicitly), `.startup_timeout_sec=60`,
+  `.env={LEAN_PROJECT_PATH="<checkout>",…}`, `.env_vars=["ELAN_HOME","LANG","TMPDIR","LAKE_CACHE_DIR","MATHLIB_CACHE_DIR","LAKE_ARTIFACT_CACHE","LAKE_RESTORE_ARTIFACTS"]`
+  (Codex starts stdio servers with a minimal environment, so the toolchain store, a UTF-8 locale,
+  the round's `TMPDIR` and the Lake/Mathlib cache settings the Lean server needs are whitelisted
+  explicitly; this is the list the smoke test found sufficient), `.startup_timeout_sec=60`,
   `.tool_timeout_sec=600`, `.required=true` (a server that cannot start fails the run instead of
   silently running without it), and for Beam `.supports_parallel_tool_calls=true`. `codex exec
   --help` documents the dotted path and TOML value; `codex mcp list` with the same flags shows the
@@ -145,24 +146,46 @@ validated) and stops the round when the executable is missing or not executable.
 preflight rejects an MCP tool combined with `--bubble`: Bubble's inner agent command is a frozen
 contract that does not yet carry these flags, so MCP tools are **host and benchmark only** for now.
 
-**Sandboxes.** Everything a server needs must be visible with no network and no home directory:
-`resolve_host_binds` lists the host directories (the tools root and `ELAN_HOME`) a bwrap sandbox
-binds read-only at the same path; the checkout with its `.lake` is already there, and the
-Lake/Mathlib cache variables reach the server through `env_vars`.
-Beam's wrapper resolves its runtime relative to its own path; lean-lsp-mcp is installed on the
-system python so its venv needs only `/usr` and the tools root. lean-lsp-mcp's remote search tools
-(`lean_leansearch`, `lean_loogle`, `lean_leanfinder`, `lean_hammer_premise`) are disabled through
-`LEAN_MCP_DISABLED_TOOLS`, so an arm never reaches unpinned, current Mathlib and never spends a
-turn on a tool that cannot work offline.
+**Sandboxes.** Everything a server needs must be visible with no network and no home directory.
+`resolve_host_binds` lists exactly two host directories, bound read-only at the same path:
+`$TAUCETI_TOOLS_ROOT` (default `~/.local/opt/tauceti-tools`) and `ELAN_HOME`. There is no python
+directory: lean-lsp-mcp's venv uses `/usr/bin/python3`, so it needs only `/usr` and the tools root,
+and Beam's wrapper resolves its runtime relative to its own path. The checkout with its `.lake` is
+already there, and the environment above reaches the server through `env_vars`. lean-lsp-mcp's
+remote search tools (`lean_leansearch`, `lean_loogle`, `lean_leanfinder`, `lean_hammer_premise`)
+are disabled through `LEAN_MCP_DISABLED_TOOLS`, so an arm never reaches unpinned, current Mathlib
+and never spends a turn on a tool that cannot work offline.
+
+**Pins.** Beam is commit `4b045750bd7b…` (`lean-beam 0.2.0-beta`) and lean-lsp-mcp is 0.31.0, both
+recorded in the tools root's `MANIFEST.json`; both toolchains passed the smoke test (GO).
+
+**Beam usage rules** (the prompt fragment states them): an importing file that is already open does
+not see a `lean_save` by itself, its `lean_sync` fails with `syncBarrierIncomplete`, so call
+`lean_refresh` on it; errors are read from `lean_sync`/`lean_refresh` with
+`diagnostics_in_result: true` (there is no diagnostics tool); `lean_run_at` results are
+speculative, a successful probe is not a saved edit. `lean_save` writes into the project's
+`.lake/build` and `.beam/`, so those must be writable in the sandbox.
 
 **Counting tool calls.** MCP calls do not pass through a wrapper, so they are not in
 `TAUCETI_TOOL_LOG`. `tauceti_worker.tool_calls.extract_tool_calls(transcript)` reads the raw
 provider transcript (Codex `exec --json` JSONL, Claude `stream-json`) and emits one record per
-call, `{provider, kind: mcp|cli, server, tool, ok, latency_ms, error_kind, t}`, counting both MCP
-calls and shell invocations of `tools/<name>.sh` (the cross-check for the wrapper log);
+call, `{provider, kind: mcp|cli|tool_search, server, tool, ok, latency_ms, error_kind, t}`, counting
+both MCP calls and shell invocations of `tools/<name>.sh` (the cross-check for the wrapper log);
 `summarize` folds them into per-tool counts. `python -m tauceti_worker.tool_calls <file>` prints
-them. Neither transcript format carries per-call timestamps or durations in the observed versions,
-so those fields are null until a provider adds them.
+them. Shapes, from real transcripts (`tests/fixtures/codex_exec_mcp_0_160.jsonl`,
+`claude_stream_mcp_2_1.jsonl`):
+
+- Codex: `item.started` then `item.completed`, both `item.type == "mcp_tool_call"` with `server`,
+  bare `tool`, `arguments`, `status` (`in_progress`, then `completed`), `error` (null on success)
+  and, on completion, `result.content[]`. One call is counted per `item.completed`. There are no
+  timestamps, so `t` and `latency_ms` are null. No failed call was captured; a failure is read
+  from `status` and `error.message`.
+- Claude: `assistant` events with `tool_use` blocks named `mcp__<server>__<tool>`, paired by
+  `tool_use_id` with the `user` event's `tool_result` (`is_error`). Events carry an ISO
+  `timestamp`, so `t` is the call's and `latency_ms` the gap to its result (approximate).
+  `ToolSearch` blocks (Claude loads deferred MCP schemas with them) are `kind: "tool_search"`,
+  reported separately by `summarize`, not as MCP calls. The `system`/`init` event lists
+  `mcp_servers` with a `status`; `transcript_mcp_servers` returns it.
 
 | Provider | Search CLIs | MCP tools |
 | --- | --- | --- |

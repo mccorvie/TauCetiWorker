@@ -6,7 +6,8 @@ Covers: the registry entries and their phases; `host_agent_argv` growing exactly
 overrides / the Claude `--mcp-config` file and nothing else; no injection for Kiro or the
 OpenRouter runner; `preflight_tools` (missing executable, Bubble, CLI-only selections); host binds;
 prompt fragments rendering the project directory; managed-worker validation; and
-`extract_tool_calls` on a synthetic transcript of each provider.
+`extract_tool_calls` on real captured transcripts (tests/fixtures) of each provider, plus synthetic
+failure and CLI-wrapper shapes the captures do not contain.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from tauceti_worker.agents import host_agent_argv
-from tauceti_worker.tool_calls import extract_tool_calls, summarize
+from tauceti_worker.tool_calls import extract_tool_calls, summarize, transcript_mcp_servers
 from tauceti_worker.tools import (
     BEAM,
     CHECKOUT_PLACEHOLDER,
@@ -63,7 +64,9 @@ os.environ["TAUCETI_TOOLS_ROOT"] = str(tools_root)
 os.environ["TAUCETI_BEAM_MCP"] = str(beam_bin)
 os.environ["TAUCETI_LEAN_LSP_MCP"] = str(lsp_bin)
 os.environ["ELAN_HOME"] = str(elan_home)
-LEAN_ENV_VARS = '["ELAN_HOME","LAKE_CACHE_DIR","MATHLIB_CACHE_DIR","LAKE_ARTIFACT_CACHE","LAKE_RESTORE_ARTIFACTS"]'
+LEAN_ENV_VARS = (
+    '["ELAN_HOME","LANG","TMPDIR","LAKE_CACHE_DIR","MATHLIB_CACHE_DIR","LAKE_ARTIFACT_CACHE","LAKE_RESTORE_ARTIFACTS"]'
+)
 project = root / "TauCeti"
 project.mkdir()
 rounddir = root / "round"
@@ -311,6 +314,45 @@ os.environ["TAUCETI_BEAM_MCP"] = str(beam_bin)
 # Transcript extraction
 # ---------------------------------------------------------------------------------------------------
 
+FIXTURES = REPO / "tests" / "fixtures"
+codex_real = FIXTURES / "codex_exec_mcp_0_160.jsonl"
+calls = extract_tool_calls(codex_real)
+check(
+    "codex fixture: one record per item.completed",
+    [(c["provider"], c["kind"], c["server"], c["tool"], c["ok"], c["latency_ms"], c["t"]) for c in calls],
+    [
+        ("codex", "mcp", "lean_beam", "lean_sync", True, None, None),
+        ("codex", "mcp", "lean_beam", "lean_goals", True, None, None),
+    ],
+)
+check(
+    "codex fixture summary",
+    summarize(calls),
+    {"mcp": {"lean_beam/lean_sync": 1, "lean_beam/lean_goals": 1}, "cli": {}, "tool_search": 0, "failed": 0},
+)
+check("codex fixture lists no servers", transcript_mcp_servers(codex_real), {})
+
+claude_real = FIXTURES / "claude_stream_mcp_2_1.jsonl"
+calls = extract_tool_calls(claude_real)
+check(
+    "claude fixture: ToolSearch is not an MCP call",
+    [(c["kind"], c["server"], c["tool"], c["ok"]) for c in calls],
+    [
+        ("tool_search", None, "ToolSearch", True),
+        ("mcp", "lean_beam", "lean_sync", True),
+        ("mcp", "lean_beam", "lean_goals", True),
+    ],
+)
+check("claude fixture timestamps", all(c["t"] and c["latency_ms"] is not None for c in calls), True)
+check(
+    "claude fixture summary",
+    summarize(calls),
+    {"mcp": {"lean_beam/lean_sync": 1, "lean_beam/lean_goals": 1}, "cli": {}, "tool_search": 1, "failed": 0},
+)
+check("claude fixture connected servers", transcript_mcp_servers(claude_real), {"lean_beam": "connected"})
+
+# Failure and CLI-wrapper shapes: not in the captures (no call failed), so synthetic; the error shape
+# is the Codex `McpToolCallError` `{"message": ...}`.
 codex_lines = [
     {"type": "thread.started", "thread_id": "t1"},
     {
@@ -381,7 +423,12 @@ check(
 check(
     "codex summary",
     summarize(calls),
-    {"mcp": {"lean_beam/lean_sync": 1, "lean_beam/lean_run_at": 1}, "cli": {"loogle": 1, "finder": 1}, "failed": 2},
+    {
+        "mcp": {"lean_beam/lean_sync": 1, "lean_beam/lean_run_at": 1},
+        "cli": {"loogle": 1, "finder": 1},
+        "tool_search": 0,
+        "failed": 2,
+    },
 )
 
 claude_lines = [
@@ -458,7 +505,12 @@ check(
 check(
     "claude summary",
     summarize(calls),
-    {"mcp": {"lean_lsp/lean_goal": 1, "lean_lsp/lean_multi_attempt": 1}, "cli": {"explore": 1}, "failed": 2},
+    {
+        "mcp": {"lean_lsp/lean_goal": 1, "lean_lsp/lean_multi_attempt": 1},
+        "cli": {"explore": 1},
+        "tool_search": 0,
+        "failed": 2,
+    },
 )
 check("empty transcript", extract_tool_calls(root / "codex.jsonl") != [], True)
 
