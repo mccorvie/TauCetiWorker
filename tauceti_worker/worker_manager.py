@@ -34,7 +34,7 @@ from .paths import HERE, ensure_ssl_cert_file, entry_cmd, self_argv, self_env
 from .quota import parse_pace_curve
 from .round import signal_group
 from .runtime_status import STATUS_ENV, read_json, update_status
-from .tools import resolve_tools
+from .tools import preflight_tools, resolve_tools
 
 CONFIG_VERSION = 1
 DEFAULT_INTERVAL = 2.0
@@ -292,6 +292,7 @@ class WorkerSpec:
             raise WorkersError(f"workers[{index}].restart must be 'always', 'on-failure', or 'never'")
         try:
             tools = resolve_tools(_strings(raw.get("tools", []), f"workers[{index}].tools"))
+            preflight_tools(tools, None, bubble=(sandbox == "bubble"))
         except ValueError as e:
             raise WorkersError(f"workers[{index}].tools: {e}") from None
         spec = WorkerSpec(

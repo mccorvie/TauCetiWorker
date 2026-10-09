@@ -146,9 +146,17 @@ def _effective_authoring_profile(opts) -> AuthoringProfile:
     return getattr(opts, "authoring_profile", None) or resolve_authoring_profile(opts.work_model)
 
 
-def _with_tools(prompt: str, opts: RoundOpts, phase: str, bubble: bool) -> str:
-    """Attach model-facing instructions for the explicitly enabled tools eligible in this phase."""
-    return add_tool_prompt(prompt, tuple(getattr(opts, "tools", ())), phase, wrapper_bin(bubble))
+def _with_tools(prompt: str, opts: RoundOpts, phase: str, bubble: bool, project_dir: Path | None = None) -> str:
+    """Attach model-facing instructions for the explicitly enabled tools eligible in this phase.
+    ``project_dir`` is the Lean project the MCP fragments name (the host checkout); Bubble rounds
+    carry no MCP tools (preflight_tools rejects them), so they pass none."""
+    return add_tool_prompt(prompt, tuple(getattr(opts, "tools", ())), phase, wrapper_bin(bubble), project_dir)
+
+
+def _round_dir(w: Worker, opts: RoundOpts) -> Path:
+    """Per-round scratch under the worker's logs: holds a Claude `--mcp-config` file when MCP tools
+    are enabled. Created lazily by whoever writes into it."""
+    return w.cfg.logdir / "rounds" / str(getattr(opts, "round_id", "adhoc"))
 
 
 @dataclass
@@ -1099,6 +1107,7 @@ def _do_fixlike(
         opts,
         label,
         bubble,
+        None if bubble else w.cfg.checkout,
     )
     if bubble:
         # The PR's head repo (its own fork, for a fork-PR) gets git fetch/push in the bubble. bubble also
@@ -1124,7 +1133,15 @@ def _do_fixlike(
         checked = rev.stdout.strip() or head
         os.environ["TAUCETI_PUSH_EXPECT"] = checked  # CAS against what we actually checked out
         log(f"  {label} #{pr}: checked out @ {checked[:12]}")
-        rc = run_agent_host(co, prompt, _effective_authoring_profile(opts), w.cfg.logdir)
+        rc = run_agent_host(
+            co,
+            prompt,
+            _effective_authoring_profile(opts),
+            w.cfg.logdir,
+            tools=tuple(getattr(opts, "tools", ())),
+            phase=label,
+            rounddir=_round_dir(w, opts),
+        )
     if rc == 0:
         w.rs.bust(pr)
     else:
@@ -1601,5 +1618,13 @@ def do_roadmap(w, sv, c, opts, bubble) -> int:
         SOURCE_GUIDANCE=source_guidance,
         BIN=wrapper_bin(),
     )
-    prompt = _with_tools(prompt, opts, "roadmap", False)
-    return run_agent_host(w.cfg.checkout, prompt, _effective_authoring_profile(opts), w.cfg.logdir)
+    prompt = _with_tools(prompt, opts, "roadmap", False, w.cfg.checkout)
+    return run_agent_host(
+        w.cfg.checkout,
+        prompt,
+        _effective_authoring_profile(opts),
+        w.cfg.logdir,
+        tools=tuple(getattr(opts, "tools", ())),
+        phase="roadmap",
+        rounddir=_round_dir(w, opts),
+    )

@@ -74,7 +74,7 @@ from .round import Claims, RoundContext, cmd_heartbeat
 from .runtime_status import report_failure
 from .survey import Counters, survey
 from .tools import doctor_rows as tool_doctor_rows
-from .tools import resolve_tools
+from .tools import preflight_tools, resolve_tools
 from .tui import cmd_tui, render_survey
 from .usage import kiro_data_dir, usage_snapshot
 from .work_units import RoundOpts, Worker, _bubble, raise_on_account_mismatch, run_round, want
@@ -761,6 +761,9 @@ def cmd_status(args) -> int:
 def cmd_work(args, *, only: list[str], agent: str, one_round: bool, prs: tuple[int, ...] = ()) -> int:
     try:
         tools = resolve_tools(getattr(args, "tool", []))
+        # An MCP tool whose server is missing must stop the round here, not run without it: the
+        # prompt would still advertise the tool and a benchmark arm would silently become control.
+        preflight_tools(tools, None, bubble=bool(getattr(args, "bubble", False)))
     except ValueError as e:
         raise Die(f"--tool: {e}") from None
     # --host used to opt OUT of the bubble sandbox; running on the host is now the default, so the flag

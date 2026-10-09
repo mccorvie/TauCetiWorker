@@ -48,9 +48,9 @@ from .quota import (
 )
 from .review_diagnostics import failure_summary
 from .runtime_status import report_failure
+from .tools import agent_tool_argv, stage_tool_scripts
 from .tools import bubble_mounts as tool_bubble_mounts
 from .tools import forwarded_environment as tool_forwarded_environment
-from .tools import stage_tool_scripts
 from .transcript import AgentTranscriptRenderer
 from .usage import UsageError, kiro_data_dir, kiro_process_env, snapshot_kiro_auth_db
 
@@ -593,11 +593,29 @@ def fetch_git_source(url: str, dir: Path) -> bool:
     return _fetch_shallow(url, dir)
 
 
-def host_agent_argv(prompt: str, profile: AuthoringProfile | str) -> tuple[list[str], dict]:
+def host_agent_argv(
+    prompt: str,
+    profile: AuthoringProfile | str,
+    *,
+    tools: tuple[str, ...] = (),
+    phase: str | None = None,
+    project_dir: Path | str | None = None,
+    rounddir: Path | str | None = None,
+) -> tuple[list[str], dict]:
     """The exact argv + env for the host work agent. HERE is on PATH so the agent
-    resolves git-safe-push / gh-safe-pr-create / claim.sh; close_fds=True replaces `9>&-`."""
+    resolves git-safe-push / gh-safe-pr-create / claim.sh; close_fds=True replaces `9>&-`.
+
+    ``tools`` (with the phase, the Lean project directory and a per-round directory) adds the MCP
+    servers of the enabled tools as per-invocation flags: Codex `-c mcp_servers.*` overrides, a Claude
+    `--mcp-config` file under ``rounddir``. See tools.agent_tool_argv; nothing is written to the
+    operator's config, and the keyword defaults keep every existing caller byte-identical."""
     env = {**os.environ, "PATH": f"{HERE / 'scripts'}:{os.environ.get('PATH', '')}"}
     profile = _authoring_profile(profile)
+    tool_args = (
+        agent_tool_argv(profile.provider, tuple(tools), phase, project_dir=project_dir, rounddir=rounddir)
+        if tools
+        else []
+    )
     if profile.provider == "codex":
         # Explicit model/effort flags are authoritative while preserving unrelated operator config
         # such as enterprise model providers, MCP servers, and notification hooks.
@@ -606,6 +624,7 @@ def host_agent_argv(prompt: str, profile: AuthoringProfile | str) -> tuple[list[
         if profile.effort:
             argv += ["-c", f'model_reasoning_effort="{profile.effort}"']
         argv += ["-c", 'model_reasoning_summary="detailed"', "-c", "show_raw_agent_reasoning=false"]
+        argv += tool_args
         argv += ["--sandbox", "danger-full-access", "--skip-git-repo-check", prompt]
     elif profile.provider == "kiro":
         # --model is mandatory: Kiro's Auto router is never allowed to choose on
@@ -631,13 +650,26 @@ def host_agent_argv(prompt: str, profile: AuthoringProfile | str) -> tuple[list[
         argv = [*base, "-p", prompt, "--output-format", "stream-json", "--verbose", "--model", profile.model]
         if profile.effort:
             argv += ["--effort", profile.effort]
+        argv += tool_args
         argv += ["--dangerously-skip-permissions"]
     return argv, env
 
 
-def run_agent_host(cwd: Path, prompt: str, profile: AuthoringProfile | str, logdir: Path) -> int:
+def run_agent_host(
+    cwd: Path,
+    prompt: str,
+    profile: AuthoringProfile | str,
+    logdir: Path,
+    *,
+    tools: tuple[str, ...] = (),
+    phase: str | None = None,
+    rounddir: Path | None = None,
+) -> int:
+    """Run the host work agent in ``cwd``. ``tools``/``phase`` hand the enabled MCP tools to
+    host_agent_argv with ``cwd`` as their Lean project; ``rounddir`` (default: logdir) holds any
+    per-round MCP config file."""
     profile = _authoring_profile(profile)
-    argv, env = host_agent_argv(prompt, profile)
+    argv, env = host_agent_argv(prompt, profile, tools=tools, phase=phase, project_dir=cwd, rounddir=rounddir or logdir)
     if os.environ.get("TAUCETI_AGENT_ECHO"):
         print(f"HOST cwd={cwd}\n  " + " ".join(_shq(a) for a in argv))
         return 0

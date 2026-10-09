@@ -51,7 +51,7 @@ BASE_ENV = {k: v for k, v in os.environ.items() if not k.startswith("TAUCETI_")}
 # Registry
 # ---------------------------------------------------------------------------------------------------
 
-check("registry names", tuple(TOOL_REGISTRY), ("loogle", "finder", "explore"))
+check("registry names", tuple(TOOL_REGISTRY), ("loogle", "finder", "explore", "beam", "leanlsp"))
 check("log env name is the documented one", TOOL_LOG_ENV, "TAUCETI_TOOL_LOG")
 
 parsed = build_parser().parse_args(["work", "--tool", "loogle", "--tool", "loogle"])
