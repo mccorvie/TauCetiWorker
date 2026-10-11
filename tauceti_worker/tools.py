@@ -110,6 +110,14 @@ class ToolDefinition:
 _LOG_HELPER = ToolScript("scripts/tools/_log.sh", "tools/_log.sh")
 _SEARCH_CLIENT = ToolScript("scripts/tools/_search_client.sh", "tools/_search_client.sh")
 
+# One line of active encouragement, shared by the three search tools so the arms differ only in the
+# tool. Shape borrowed from MathArena's tooling prompt (a plain description, a few good queries in the
+# tool's own syntax, the common mistakes; nothing mandatory and no prescribed order).
+_SEARCH_FIRST = """\
+Searching is cheap (well under a second) and the library is large: before you
+write a helper lemma, and whenever a name you expect does not resolve, search
+first, then confirm with `grep` or `#check`."""
+
 _CONFIRM_HITS = """\
 Hits are candidates, not confirmations: check each one with `grep` in
 `.lake/packages/mathlib` or `TauCeti/`, or with `#check`, and check its direction
@@ -124,14 +132,23 @@ LOOGLE = ToolDefinition(
     environment=("TAUCETI_LOOGLE_URL",),
     bubble_mounts=(ToolMount("TAUCETI_LOOGLE_SOCKET_DIR", "/run/tauceti-loogle"),),
     doctor_dependencies=("curl", "jq"),
-    prompt="""\
-A shared Tau Ceti Loogle service is available through:
+    prompt=f"""\
+A shared Tau Ceti Loogle service (search by name or type pattern over Mathlib
+and canonical Tau Ceti main at a fixed commit) is available through:
 
   "__BIN__/tools/loogle.sh" '<query>'
 
-Use it to search Mathlib and canonical Tau Ceti main for declarations.
-It does not contain branch-local changes. Confirm results in the current
-checkout before relying on them.""",
+{_SEARCH_FIRST}
+Good queries, in Loogle's own syntax:
+  Real.sqrt                              (everything mentioning a constant)
+  "add_comm"                             (name substring, in quotes)
+  _ * (_ ^ _)                            (subterm pattern with _ holes)
+  (?a -> ?b) -> List ?a -> List ?b       (type pattern with ?metavariables)
+  |- tsum _ = _ * tsum _                 (conclusion pattern)
+  Finset.sum, "le", |- _ ≤ _             (several filters, comma-separated)
+Common mistakes: English words instead of a Lean expression; a whole goal
+state or a `fun` binder; forgetting the quotes on a name fragment.
+{_CONFIRM_HITS}""",
 )
 
 FINDER = ToolDefinition(
@@ -148,8 +165,16 @@ fixed commit, is available through:
 
   "__BIN__/tools/finder.sh" '<query>'
 
-Query with a one-sentence English statement of what you need, a goal
-(`⊢ ...`), or a partial Lean signature. {_CONFIRM_HITS}""",
+{_SEARCH_FIRST}
+Good queries: one English sentence, a goal, or a partial signature:
+  'the image of a compact set under a continuous map is compact'
+  '⊢ ∑ i ∈ Finset.range n, f i ≤ ∑ i ∈ Finset.range n, g i'
+  'IsUnit (algebraMap R S x) ↔'
+  'a Noetherian ring has finitely many minimal primes'
+Common mistakes: several questions in one query (ask them one at a time); a
+bare declaration name (use `grep` for that); a hit whose direction or
+hypotheses differ from your goal.
+{_CONFIRM_HITS}""",
 )
 
 EXPLORE = ToolDefinition(
@@ -166,8 +191,17 @@ fixed commit, is available through:
 
   "__BIN__/tools/explore.sh" '<query>'
 
-Query in English, or with a guessed name fragment such as `continuousOn compact
-bounded`; it matches declaration names as well as meaning. {_CONFIRM_HITS}""",
+{_SEARCH_FIRST}
+Good queries: a sentence in English, or guessed name fragments; it matches
+declaration names as well as meaning:
+  'continuous image of a compact set is compact'
+  'continuousOn compact bounded'
+  'Ideal.span singleton quotient isField'
+  'Hausdorff dimension of a countable set'
+Common mistakes: several questions in one query (ask them one at a time); a
+query longer than a sentence; a hit whose direction or hypotheses differ from
+your goal.
+{_CONFIRM_HITS}""",
 )
 
 # Where the LSP servers are installed on the host (workboots `local-lsp/install-*.sh`): Beam's

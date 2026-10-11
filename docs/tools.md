@@ -33,7 +33,10 @@ their setup from these fields rather than special-casing names: `enabled_tools`,
 
 Every service indexes Mathlib plus canonical Tau Ceti main at one fixed commit. None sees
 branch-local changes, which the prompt fragments say, along with: hits are candidates to confirm
-with `grep` or `#check`, and an empty result is not evidence that a lemma is missing.
+with `grep` or `#check`, and an empty result is not evidence that a lemma is missing. The three
+search fragments share one line of encouragement (search before writing a helper lemma and whenever
+an expected name does not resolve) and each lists a few good queries in its own syntax plus the
+common mistakes; nothing is mandatory and no order is prescribed.
 
 The wrappers fail open. When a service is down, the wrapper prints one line to stderr, exits
 nonzero, and the agent falls back to `grep` and `#check`; the round continues.
