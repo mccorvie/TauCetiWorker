@@ -58,6 +58,27 @@ CALL_SITES = {
         SOURCE_GUIDANCE="",
         BIN="/bin",
     ),
+    # The split pair (docs/target-spec.md): the selection half writes a spec and never claims; the
+    # authoring half receives it inline and keeps the fleet prompt's claim/push/PR steps. Their call
+    # site today is TauCetiBench; a fleet `do_roadmap --split` would pass the same keys.
+    "roadmap-select.md": dict(
+        ONLY="CFSGStatement",
+        SKIP="none",
+        CLAIMED="none",
+        ROADMAP_DIR="/opt/roadmap/TauCetiRoadmap",
+        RUBRICS="/opt/rubrics/rubrics.md",
+        SOURCE_GUIDANCE="",
+        TARGET_SPEC_OUT="/work/target-spec.md",
+    ),
+    "roadmap-author.md": dict(
+        TARGET_SPEC='<!--tauceti-target:v1 {"focus":"CFSGStatement","id":"x"}-->\nRoadmap: CFSGStatement',
+        AGENT="Claude Code",
+        FORK="alice",
+        WORKERID="worker5",
+        RUBRICS="/opt/rubrics/rubrics.md",
+        SOURCE_GUIDANCE="",
+        BIN="/bin",
+    ),
 }
 
 fails = 0
@@ -98,7 +119,8 @@ def main():
         left = sorted(set(re.findall(r"__[A-Z][A-Z0-9_]*__", out)))
         check(f"{name}: renders with no placeholder left", not left)
         invocations = [ln.strip() for ln in out.splitlines() if any(f"/{w}" in ln for w in WRAPPERS)]
-        check(f"{name}: at least one wrapper invocation", bool(invocations))
+        # A prompt that takes no __BIN__ (the selection half) invokes no wrapper at all, by design.
+        check(f"{name}: at least one wrapper invocation", bool(invocations) == ("BIN" in subs))
         # Quoted, so an install directory containing a space stays one word.
         check(
             f"{name}: every wrapper invocation is absolute and quoted",

@@ -378,6 +378,8 @@ and that bootstrap in detail.
   and the window bootstrap.
 - [Worker tools](docs/tools.md): the `--tool` layer, the search services it
   talks to, and the per-call log it writes.
+- [The target spec](docs/target-spec.md): the `roadmap-select` / `roadmap-author`
+  split prompts and the `tauceti.target-spec/v1` handoff between them.
 - [Inside the sandbox](docs/sandbox.md): what `--bubble` enforces, Lake caches,
   and macOS credential handling.
 - [Docker deployment](docs/docker.md): the unattended Compose deployment.
