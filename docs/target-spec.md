@@ -37,7 +37,8 @@ Consumer roadmap: <designated-roadmap>
   validates specs and PR bodies alike and the slug the author claims is the slug the planner chose.
   `focus` is a canonical top-level directory of TauCetiRoadmap (never `any`/`auto`); `id` is the
   slug rule from the roadmap prompt: lowercase, every run of non-alphanumerics replaced by one `-`
-  (`target_spec.slugify`). No other keys.
+  (`target_spec.slugify`). Other keys (fleet PRs have carried `"partial":true`) are kept as
+  `marker_extra` and written back, never interpreted.
 - **Line 2** is `Roadmap: <target-roadmap>` and must equal `focus`.
 - **`Consumer roadmap:`** appears only after a prerequisite switch and names the roadmap the planner
   was assigned; it must differ from the target roadmap.

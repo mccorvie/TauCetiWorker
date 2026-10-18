@@ -72,6 +72,18 @@ check("marker regex is the survey's", bool(tc.TARGET_MARKER_RE.fullmatch(spec.ma
 check("validate_spec ok", ts.validate_spec(GOOD), None)
 check("leading blank lines tolerated", error_of("\n\n" + GOOD), None)
 
+# Extra marker keys (fleet PRs carry `"partial":true`) are kept and round-tripped, never rejected.
+partial = GOOD.replace(
+    '"id":"galois-group-multiquadratic-z2n"}', '"id":"galois-group-multiquadratic-z2n","partial":true}'
+)
+check("extra marker key kept", ts.parse_spec(partial).marker_extra, {"partial": True})
+check("extra marker key round trips", ts.parse_spec(partial).render().splitlines()[0], partial.splitlines()[0])
+check(
+    "marker_line with extra",
+    ts.marker_line("A", "b", {"partial": True}),
+    '<!--tauceti-target:v1 {"focus":"A","id":"b","partial":true}-->',
+)
+
 # A prerequisite switch records the consumer roadmap.
 switched = GOOD.replace("Roadmap: Multiquadratic\n", "Roadmap: Multiquadratic\nConsumer roadmap: ClassField\n")
 check("consumer roadmap", ts.parse_spec(switched).consumer_roadmap, "ClassField")
@@ -87,10 +99,6 @@ bad = {
         "not a concrete roadmap area",
     ),
     "bad slug": (GOOD.replace('"id":"galois-group-multiquadratic-z2n"', '"id":"Galois Group"'), "is not a slug"),
-    "extra key": (
-        GOOD.replace('"id":"galois-group-multiquadratic-z2n"', '"id":"galois-group-multiquadratic-z2n","extra":1'),
-        "unexpected key",
-    ),
     "roadmap mismatch": (GOOD.replace("Roadmap: Multiquadratic", "Roadmap: ClassField"), "does not match"),
     "roadmap missing": (GOOD.replace("Roadmap: Multiquadratic\n", ""), "line after the marker"),
     "consumer equals target": (

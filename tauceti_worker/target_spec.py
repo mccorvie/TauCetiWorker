@@ -58,10 +58,13 @@ class Spec:
     id: str
     consumer_roadmap: str | None
     sections: dict[str, str] = field(default_factory=dict)
+    # Keys beyond focus/id that the marker carried (fleet PRs have been seen with `"partial":true`);
+    # kept so a round trip preserves the marker, never interpreted here.
+    marker_extra: dict[str, object] = field(default_factory=dict)
 
     @property
     def marker(self) -> str:
-        return marker_line(self.focus, self.id)
+        return marker_line(self.focus, self.id, self.marker_extra)
 
     def render(self) -> str:
         """The canonical text form; `parse_spec(spec.render()) == spec`."""
@@ -73,9 +76,11 @@ class Spec:
         return "\n".join(lines) + "\n"
 
 
-def marker_line(focus: str, slug: str) -> str:
-    """The exact marker line the PR wrapper looks for (compact JSON, fixed key order)."""
-    return f"<!--tauceti-target:v1 {json.dumps({'focus': focus, 'id': slug}, separators=(',', ':'))}-->"
+def marker_line(focus: str, slug: str, extra: dict[str, object] | None = None) -> str:
+    """The exact marker line the PR wrapper looks for (compact JSON, focus and id first)."""
+    payload: dict[str, object] = {"focus": focus, "id": slug}
+    payload.update({k: v for k, v in (extra or {}).items() if k not in ("focus", "id")})
+    return f"<!--tauceti-target:v1 {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}-->"
 
 
 def _check_area(name: str, what: str) -> str:
@@ -107,9 +112,7 @@ def parse_spec(text: str) -> Spec:
     _check_area(focus, "marker focus")
     if not SLUG_RE.match(slug):
         raise SpecError(f"marker id {slug!r} is not a slug (lowercase alphanumerics joined by single '-')")
-    extra = sorted(set(payload) - {"focus", "id"})
-    if extra:
-        raise SpecError(f"marker has unexpected key(s): {', '.join(extra)}")
+    extra = {k: v for k, v in payload.items() if k not in ("focus", "id")}
     i += 1
 
     if i == len(lines) or not (rm := _ROADMAP_LINE_RE.match(lines[i])):
@@ -158,7 +161,7 @@ def parse_spec(text: str) -> Spec:
     missing = [s for s in REQUIRED_SECTIONS if s not in sections]
     if missing:
         raise SpecError(f"missing section(s): {', '.join('## ' + s for s in missing)}")
-    return Spec(focus=focus, id=slug, consumer_roadmap=consumer, sections=sections)
+    return Spec(focus=focus, id=slug, consumer_roadmap=consumer, sections=sections, marker_extra=extra)
 
 
 def validate_spec(text: str) -> str | None:
